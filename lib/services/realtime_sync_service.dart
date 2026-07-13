@@ -60,7 +60,7 @@ class RealtimeSyncService {
         schema: 'pukhuk',
         table: 'game_sessions',
         filter: PostgresChangeFilter(
-          type: FilterType.eq,
+          type: PostgresChangeFilterType.eq,
           column: 'id',
           value: sessionId,
         ),
