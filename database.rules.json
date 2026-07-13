@@ -1,0 +1,30 @@
+{
+  "rules": {
+    "game_sessions": {
+      "$sessionId": {
+        // Only the two participants can read/write live game state.
+        ".read": "auth != null && (data.child('player1Id').val() === auth.uid || data.child('player2Id').val() === auth.uid)",
+        ".write": "auth != null && (data.child('player1Id').val() === auth.uid || data.child('player2Id').val() === auth.uid || !data.exists())",
+
+        "pucks": {
+          "$puckId": {
+            ".validate": "newData.hasChildren(['id', 'ownerId'])"
+          }
+        },
+
+        "presence": {
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid"
+          }
+        }
+      }
+    },
+
+    "matchmaking_queue": {
+      ".read": "auth != null",
+      "$uid": {
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    }
+  }
+}

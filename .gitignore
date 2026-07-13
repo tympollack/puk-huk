@@ -1,0 +1,29 @@
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+
+# Generated code
+**/*.g.dart
+**/*.freezed.dart
+
+# Firebase
+lib/firebase_options.dart
+.firebase/
+firebase-debug.log
+
+# Platform
+android/
+ios/
+macos/
+linux/
+windows/
+web/
+
+.DS_Store
+
+# Environment Variables
+.env

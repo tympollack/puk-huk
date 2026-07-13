@@ -1,0 +1,61 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Puk Huk — Firestore Security Rules
+// Mirrors WSW's auth-gated read / owner-or-system-write pattern.
+// ─────────────────────────────────────────────────────────────────────────────
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ── /users/{uid} ────────────────────────────────────────────────────
+    // Public read (leaderboards, opponent profiles), owner-only write.
+    // ELO/wins/losses are mutated server-side only (see note below) —
+    // for a fully trustless setup, move resolveMatch() into a Cloud
+    // Function and lock these fields from direct client writes.
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow create: if isOwner(uid);
+      allow update: if isOwner(uid)
+                    || isSignedIn(); // TODO: restrict to Cloud Function service account in production
+    }
+
+    // ── /matches/{matchId} ──────────────────────────────────────────────
+    // Read: both participants. Write: only during active matchmaking flow.
+    match /matches/{matchId} {
+      allow read: if isSignedIn() &&
+                  (resource.data.player1Id == request.auth.uid ||
+                   resource.data.player2Id == request.auth.uid);
+      allow create, update: if isSignedIn(); // tighten via Cloud Function in production
+    }
+
+    // ── /matchmaking_queue/{uid} ────────────────────────────────────────
+    // Only the player themself can join/leave their own queue entry.
+    match /matchmaking_queue/{uid} {
+      allow read: if isSignedIn();
+      allow create, delete: if isOwner(uid);
+      allow update: if isSignedIn(); // needed for transaction-based pairing by the matched opponent
+    }
+
+    // ── /leaderboards/{board}/players/{uid} ─────────────────────────────
+    // Public read for everyone (even logged-out splash screens, optional).
+    // Write restricted — should be Cloud Function only in production.
+    match /leaderboards/{boardId}/players/{uid} {
+      allow read: if true;
+      allow write: if isSignedIn(); // tighten to Cloud Function service account
+    }
+
+    // ── /tournaments/{tournamentId} ─────────────────────────────────────
+    match /tournaments/{tournamentId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn(); // tighten to admin/Cloud Function role
+    }
+  }
+}
