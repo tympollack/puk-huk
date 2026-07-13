@@ -20,7 +20,12 @@ SUPABASE_URL=$SUPABASE_URL
 SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY
 EOF
 
-# 3. Build the Flutter web app
+# 3. Generate Freezed & Riverpod code
+echo "Generating code with build_runner..."
+flutter pub get
+dart run build_runner build --delete-conflicting-outputs
+
+# 4. Build the Flutter web app
 echo "Building Flutter web app..."
 flutter build web --release
 
