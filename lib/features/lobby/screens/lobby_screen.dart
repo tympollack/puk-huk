@@ -104,7 +104,7 @@ class LobbyScreen extends ConsumerWidget {
     if (context.mounted) {
       Navigator.pop(context); // remove loading
       if (result.status == MatchmakingStatus.found) {
-        context.push('${Routes.game}/${result.sessionId!}');
+        context.push(Routes.gameWithId(result.sessionId!));
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to start bot match: ${result.errorMessage}')),
