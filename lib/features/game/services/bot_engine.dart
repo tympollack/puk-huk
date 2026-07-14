@@ -13,7 +13,7 @@ import '../../../data/models/player_model.dart';
 const String pukhukBotId = '00000000-0000-0000-0000-000000000000';
 
 class BotEngine {
-  final Ref ref;
+  final WidgetRef ref;
   final String sessionId;
   final PlayerModel localPlayer;
 
@@ -24,7 +24,7 @@ class BotEngine {
   BotEngine(this.ref, this.sessionId, this.localPlayer);
 
   void start() {
-    _subscription = ref.listen<AsyncValue<GameSessionState>>(
+    _subscription = ref.listenManual<AsyncValue<GameSessionState>>(
       gameSessionProvider(sessionId),
       (previous, next) {
         final state = next.value;
