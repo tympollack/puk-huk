@@ -38,7 +38,7 @@ class _MatchmakingScreenState extends ConsumerState<MatchmakingScreen> {
   }
 
   void _startSearch() {
-    final player = ref.read(currentPlayerProvider).valueOrNull;
+    final player = ref.read(currentPlayerProvider).value;
     if (player == null) return;
 
     final service = ref.read(matchmakingServiceProvider);
@@ -53,7 +53,7 @@ class _MatchmakingScreenState extends ConsumerState<MatchmakingScreen> {
   }
 
   void _cancelSearch() {
-    final player = ref.read(currentPlayerProvider).valueOrNull;
+    final player = ref.read(currentPlayerProvider).value;
     if (player != null) {
       ref.read(matchmakingServiceProvider).leaveQueue(player.uid);
     }

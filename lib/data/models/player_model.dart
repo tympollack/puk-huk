@@ -14,6 +14,8 @@ part 'player_model.g.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 @freezed
 class PlayerModel with _$PlayerModel {
+  const PlayerModel._();
+
   const factory PlayerModel({
     required String uid,          // auth.users.id — auth UID
     required String displayName,  // from hub profiles.display_name
@@ -97,6 +99,8 @@ String getTierForElo(int elo) {
 // ─────────────────────────────────────────────────────────────────────────────
 @freezed
 class LeaderboardEntry with _$LeaderboardEntry {
+  const LeaderboardEntry._();
+
   const factory LeaderboardEntry({
     required String uid,
     required String displayName,

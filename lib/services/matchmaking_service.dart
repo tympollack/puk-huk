@@ -11,7 +11,7 @@ import 'elo_service.dart';
 part 'matchmaking_service.g.dart';
 
 @riverpod
-MatchmakingService matchmakingService(MatchmakingServiceRef ref) =>
+MatchmakingService matchmakingService(Ref ref) =>
     MatchmakingService(Supabase.instance.client);
 
 // ─────────────────────────────────────────────────────────────────────────────

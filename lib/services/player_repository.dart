@@ -9,7 +9,7 @@ import '../data/models/player_model.dart';
 part 'player_repository.g.dart';
 
 @riverpod
-PlayerRepository playerRepository(PlayerRepositoryRef ref) =>
+PlayerRepository playerRepository(Ref ref) =>
     PlayerRepository(Supabase.instance.client);
 
 // ─────────────────────────────────────────────────────────────────────────────

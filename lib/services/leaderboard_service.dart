@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -7,7 +8,7 @@ import '../data/models/player_model.dart';
 part 'leaderboard_service.g.dart';
 
 @riverpod
-LeaderboardService leaderboardService(LeaderboardServiceRef ref) =>
+LeaderboardService leaderboardService(Ref ref) =>
     LeaderboardService(Supabase.instance.client);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,6 +124,6 @@ class LeaderboardService {
 // Provider wrappers for direct widget consumption
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-Stream<List<LeaderboardEntry>> globalLeaderboard(GlobalLeaderboardRef ref) {
+Stream<List<LeaderboardEntry>> globalLeaderboard(Ref ref) {
   return ref.watch(leaderboardServiceProvider).watchGlobalTop();
 }

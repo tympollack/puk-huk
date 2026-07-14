@@ -9,7 +9,7 @@ import '../data/models/game_session_model.dart';
 part 'realtime_sync_service.g.dart';
 
 @riverpod
-RealtimeSyncService realtimeSyncService(RealtimeSyncServiceRef ref) =>
+RealtimeSyncService realtimeSyncService(Ref ref) =>
     RealtimeSyncService(Supabase.instance.client);
 
 class RealtimeSyncService {

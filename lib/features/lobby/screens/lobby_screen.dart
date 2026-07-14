@@ -19,7 +19,7 @@ class LobbyScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final player = ref.watch(currentPlayerProvider).valueOrNull;
+    final player = ref.watch(currentPlayerProvider).value;
 
     return Scaffold(
       appBar: AppBar(

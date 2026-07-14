@@ -33,7 +33,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
   }
 
   void _handlePuckSettled(PuckComponent puck) {
-    final player = ref.read(currentPlayerProvider).valueOrNull;
+    final player = ref.read(currentPlayerProvider).value;
     if (player == null) return;
 
     // The puck's position is relative to the board centre, but zoneForPosition 
@@ -44,18 +44,18 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     final zone = BoardBoundaryComponent.zoneForPosition(xPos, PukHukGame.boardLength);
     final pointsScored = ScoringZones.pointsForZone(zone, isHanger: zone == -1);
 
-    ref
-        .read(turnStatsControllerProvider(widget.sessionId, player.uid).notifier)
-        .recordPuckResult(
-          speed: puck.peakSpeed,
-          distance: puck.totalDistance,
-          pointsScored: pointsScored,
-        );
+    // ref
+    //     .read(turnStatsControllerProvider(widget.sessionId, player.uid).notifier)
+    //     .recordPuckResult(
+    //       speed: puck.peakSpeed,
+    //       distance: puck.totalDistance,
+    //       pointsScored: pointsScored,
+    //     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final player = ref.watch(currentPlayerProvider).valueOrNull;
+    final player = ref.watch(currentPlayerProvider).value;
 
     return Scaffold(
       backgroundColor: PukHukTheme.surface,

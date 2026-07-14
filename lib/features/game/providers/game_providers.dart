@@ -10,7 +10,7 @@ part 'game_providers.g.dart';
 // Live game session stream
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-Stream<GameSessionState> gameSession(GameSessionRef ref, String sessionId) {
+Stream<GameSessionState> gameSession(Ref ref, String sessionId) {
   final sync = ref.watch(realtimeSyncServiceProvider);
   return sync.watchSession(sessionId);
 }
