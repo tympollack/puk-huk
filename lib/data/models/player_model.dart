@@ -22,6 +22,7 @@ abstract class PlayerModel with _$PlayerModel {
 
     // ── ELO & Ranking ────────────────────────────────────────────────────
     @Default(1000) int elo,
+    @Default(1000) int unrankedElo,
     @Default('bronze') String tier,
 
     // ── Match Record ─────────────────────────────────────────────────────
@@ -52,6 +53,7 @@ abstract class PlayerModel with _$PlayerModel {
       uid: row['auth_uid'] as String,
       displayName: row['display_name'] as String? ?? 'Player',
       elo: row['elo'] as int? ?? 1000,
+      unrankedElo: row['unranked_elo'] as int? ?? 1000,
       tier: row['tier'] as String? ?? 'bronze',
       wins: row['wins'] as int? ?? 0,
       losses: row['losses'] as int? ?? 0,

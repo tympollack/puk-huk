@@ -205,6 +205,41 @@ class MatchmakingService {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Bot Match Initialization
+  // ─────────────────────────────────────────────────────────────────────────
+  Future<MatchmakingState> startBotMatch(PlayerModel player) async {
+    final id = const Uuid().v4();
+    final botId = '00000000-0000-0000-0000-000000000000';
+
+    try {
+      await _supabase.schema('pukhuk').from('game_sessions').insert({
+        'id': id,
+        'match_id': id,
+        'state': {
+          'status': 'active',
+          'turn_number': 1,
+          'current_turn_player_id': player.uid,
+          'scores': {player.uid: 0, botId: 0},
+          'board_state': []
+        }
+      });
+
+      return MatchmakingState(
+        status: MatchmakingStatus.found,
+        matchId: id,
+        sessionId: id,
+        opponentId: botId,
+        waitTime: Duration.zero,
+      );
+    } catch (e) {
+      return MatchmakingState(
+        status: MatchmakingStatus.error,
+        errorMessage: e.toString(),
+      );
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Atomic pairing via Postgres RPC — eliminates double-matching
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _attemptPair({
@@ -286,6 +321,40 @@ class MatchmakingService {
     );
 
     await _supabase.rpc('resolve_match', params: {
+      'p_match_id': matchId,
+      'p_winner_id': winnerId,
+      'p_loser_id': loserId,
+      'p_winner_elo_change': result.winnerEloChange,
+      'p_loser_elo_change': result.loserEloChange,
+      'p_winner_new_elo': result.winnerNewElo,
+      'p_loser_new_elo': result.loserNewElo,
+      'p_winner_score': winnerScore,
+      'p_loser_score': loserScore,
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Resolve unranked match (e.g. Bot match)
+  // ─────────────────────────────────────────────────────────────────────────
+  Future<void> resolveUnrankedMatch({
+    required String matchId,
+    required String winnerId,
+    required String loserId,
+    required int winnerElo,
+    required int loserElo,
+    required int winnerGamesPlayed,
+    required int loserGamesPlayed,
+    required int winnerScore,
+    required int loserScore,
+  }) async {
+    final result = EloService.calculateMatch(
+      winnerElo: winnerElo,
+      loserElo: loserElo,
+      winnerGamesPlayed: winnerGamesPlayed,
+      loserGamesPlayed: loserGamesPlayed,
+    );
+
+    await _supabase.rpc('resolve_unranked_match', params: {
       'p_match_id': matchId,
       'p_winner_id': winnerId,
       'p_loser_id': loserId,

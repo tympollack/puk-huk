@@ -8,6 +8,7 @@ import '../../../core/router/app_router.dart';
 import '../../../core/theme/puk_huk_theme.dart';
 import '../../../data/models/player_model.dart';
 import '../../../services/leaderboard_service.dart';
+import '../../../services/matchmaking_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LobbyScreen — central hub: find matches, see active tournaments,
@@ -50,7 +51,16 @@ class LobbyScreen extends ConsumerWidget {
                     onTap: () => context.push(Routes.matchmaking),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ActionTile(
+                    icon: Icons.smart_toy,
+                    label: 'VS BOT',
+                    color: PukHukTheme.accent,
+                    onTap: () => _startBotMatch(context, ref, player),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: _ActionTile(
                     icon: Icons.emoji_events_outlined,
@@ -76,6 +86,31 @@ class LobbyScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _startBotMatch(BuildContext context, WidgetRef ref, PlayerModel? player) async {
+    if (player == null) return;
+    
+    // Show loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final matchmakingService = ref.read(matchmakingServiceProvider);
+    final result = await matchmakingService.startBotMatch(player);
+
+    if (context.mounted) {
+      Navigator.pop(context); // remove loading
+      if (result.status == MatchmakingStatus.found) {
+        context.push('${Routes.game}/${result.sessionId!}');
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start bot match: ${result.errorMessage}')),
+        );
+      }
+    }
   }
 }
 

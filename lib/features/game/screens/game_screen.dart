@@ -9,6 +9,7 @@ import '../engine/puck_component.dart';
 import '../engine/puk_huk_game.dart';
 import '../hud/game_hud_widget.dart';
 import '../providers/game_providers.dart';
+import '../services/bot_engine.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GameScreen — fullscreen Flame canvas + HUD overlay + RTDB sync wiring.
@@ -23,6 +24,8 @@ class GameScreen extends ConsumerStatefulWidget {
 
 class _GameScreenState extends ConsumerState<GameScreen> {
   late final PukHukGame _game;
+  BotEngine? _botEngine;
+  ProviderSubscription? _sessionSub;
 
   @override
   void initState() {
@@ -30,6 +33,31 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     _game = PukHukGame(
       onPuckSettled: _handlePuckSettled,
     );
+    
+    // Listen to session to initialize bot if needed
+    _sessionSub = ref.listenManual(
+      gameSessionProvider(widget.sessionId),
+      (prev, next) {
+        final state = next.value;
+        if (state == null) return;
+        
+        if (_botEngine == null && state.scores.containsKey(pukhukBotId)) {
+          final player = ref.read(currentPlayerProvider).value;
+          if (player != null) {
+            _botEngine = BotEngine(ref, widget.sessionId, player);
+            _botEngine!.start();
+          }
+        }
+      },
+      fireImmediately: true,
+    );
+  }
+
+  @override
+  void dispose() {
+    _sessionSub?.close();
+    _botEngine?.stop();
+    super.dispose();
   }
 
   void _handlePuckSettled(PuckComponent puck) {
