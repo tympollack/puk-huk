@@ -56,7 +56,7 @@ class LobbyScreen extends ConsumerWidget {
                   child: _ActionTile(
                     icon: Icons.smart_toy,
                     label: 'VS BOT',
-                    color: PukHukTheme.accent,
+                    color: PukHukTheme.secondary,
                     onTap: () => _startBotMatch(context, ref, player),
                   ),
                 ),
