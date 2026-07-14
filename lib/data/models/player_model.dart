@@ -13,7 +13,7 @@ part 'player_model.g.dart';
 // references (game_sessions.player1_id etc.) use this same auth UID.
 // ─────────────────────────────────────────────────────────────────────────────
 @freezed
-class PlayerModel with _$PlayerModel {
+abstract class PlayerModel with _$PlayerModel {
   const PlayerModel._();
 
   const factory PlayerModel({
@@ -98,7 +98,7 @@ String getTierForElo(int elo) {
 // Built from puk_huk_players rows (display_name already embedded).
 // ─────────────────────────────────────────────────────────────────────────────
 @freezed
-class LeaderboardEntry with _$LeaderboardEntry {
+abstract class LeaderboardEntry with _$LeaderboardEntry {
   const LeaderboardEntry._();
 
   const factory LeaderboardEntry({

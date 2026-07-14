@@ -12,7 +12,7 @@ part 'auth_provider.g.dart';
 // Emits the auth UID (String) when signed in, null when signed out.
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-Stream<String?> authState(AuthStateRef ref) {
+Stream<String?> authState(Ref ref) {
   return Supabase.instance.client.auth.onAuthStateChange
       .map((event) => event.session?.user.id);
 }
@@ -22,8 +22,8 @@ Stream<String?> authState(AuthStateRef ref) {
 // Null when not signed in or profile not yet created.
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-Stream<PlayerModel?> currentPlayer(CurrentPlayerRef ref) {
-  final authValue = ref.watch(authStateProvider).valueOrNull;
+Stream<PlayerModel?> currentPlayer(Ref ref) {
+  final authValue = ref.watch(authStateProvider).value;
   if (authValue == null) return Stream.value(null);
   return ref.watch(playerRepositoryProvider).watchPlayer(authValue);
 }
@@ -32,7 +32,7 @@ Stream<PlayerModel?> currentPlayer(CurrentPlayerRef ref) {
 // AuthService — sign in / sign up / sign out via Supabase Auth
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-AuthService authService(AuthServiceRef ref) =>
+AuthService authService(Ref ref) =>
     AuthService(Supabase.instance.client, ref.watch(playerRepositoryProvider));
 
 class AuthService {

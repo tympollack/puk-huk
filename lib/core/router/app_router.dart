@@ -31,14 +31,14 @@ abstract class Routes {
 // Router provider
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-GoRouter appRouter(AppRouterRef ref) {
+GoRouter appRouter(Ref ref) {
   final authState = ref.watch(authStateProvider);
 
   return GoRouter(
     initialLocation: Routes.lobby,
     debugLogDiagnostics: true,
     redirect: (context, state) {
-      final isLoggedIn = authState.valueOrNull != null;
+      final isLoggedIn = authState.value != null;
       final isOnAuthRoute = state.fullPath?.startsWith('/auth') ?? false;
 
       if (!isLoggedIn && !isOnAuthRoute) return Routes.login;

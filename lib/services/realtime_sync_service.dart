@@ -27,7 +27,7 @@ class RealtimeSyncService {
 
   Future<void> _ensureSubscribed(String sessionId) async {
     final ch = _channel(sessionId);
-    await ch.subscribe();
+    ch.subscribe();
   }
 
   Stream<GameSessionState> watchSession(String sessionId) {

@@ -9,7 +9,7 @@ part 'game_session_model.g.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 @freezed
-class PuckStateModel with _$PuckStateModel {
+abstract class PuckStateModel with _$PuckStateModel {
   const factory PuckStateModel({
     @JsonKey(name: 'puck_id') required String puckId,
     @JsonKey(name: 'owner_id') required String ownerId,
@@ -23,7 +23,7 @@ class PuckStateModel with _$PuckStateModel {
 }
 
 @freezed
-class ActionModel with _$ActionModel {
+abstract class ActionModel with _$ActionModel {
   const factory ActionModel({
     @JsonKey(name: 'player_id') required String playerId,
     @JsonKey(name: 'vector_x') required double vectorX,
@@ -38,7 +38,7 @@ class ActionModel with _$ActionModel {
 }
 
 @freezed
-class GameSessionState with _$GameSessionState {
+abstract class GameSessionState with _$GameSessionState {
   const factory GameSessionState({
     required String status, // 'active', 'completed'
     @JsonKey(name: 'turn_number') required int turnNumber,

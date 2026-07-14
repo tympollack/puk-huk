@@ -99,6 +99,6 @@ const List<Achievement> kAchievementCatalogue = [
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
 Set<String> unlockedAchievementIds(Ref ref) {
-  final player = ref.watch(currentPlayerProvider).valueOrNull;
+  final player = ref.watch(currentPlayerProvider).value;
   return player?.achievements.toSet() ?? {};
 }
