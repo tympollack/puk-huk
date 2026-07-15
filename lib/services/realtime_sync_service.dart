@@ -93,6 +93,25 @@ class RealtimeSyncService {
     required int expectedTurnNumber,
     required GameSessionState newState,
   }) async {
+    final isBotMatch = newState.scores.keys.contains('00000000-0000-0000-0000-000000000000');
+
+    if (isBotMatch) {
+      // Bot matches are local and unranked, so we bypass the RPC 
+      // (which requires a puk_huk_matches row) to avoid 400 Bad Requests.
+      final response = await _supabase
+          .schema('pukhuk')
+          .from('game_sessions')
+          .update({'state': newState.toJson()})
+          .eq('id', matchId)
+          .eq('state->>turn_number', expectedTurnNumber.toString())
+          .select();
+
+      if (response.isEmpty) {
+        throw Exception('Failed to submit turn: State may have changed or session not found.');
+      }
+      return;
+    }
+
     try {
       await _supabase.rpc(
         'submit_turn',
@@ -106,14 +125,12 @@ class RealtimeSyncService {
     } catch (e) {
       print('RPC submit_turn failed: $e, falling back to direct update');
       
-      // Fallback for unranked/bot matches that may not have a `matches` table entry,
-      // or if the RPC fails for any other reason.
       final response = await _supabase
           .schema('pukhuk')
           .from('game_sessions')
           .update({'state': newState.toJson()})
           .eq('id', matchId)
-          .eq('state->turn_number', expectedTurnNumber)
+          .eq('state->>turn_number', expectedTurnNumber.toString())
           .select();
           
       if (response.isEmpty) {
