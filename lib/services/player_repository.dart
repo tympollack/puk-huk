@@ -26,26 +26,13 @@ class PlayerRepository {
 
   PlayerRepository(this._supabase);
 
-  // ── Create both hub profile and game profile on sign-up ─────────────────
+  // ── Create game profile on sign-up ───────────────────────────────────────
   Future<void> createPlayer({
     required String uid,
     required String displayName,
   }) async {
-    // 1. Insert hub profile
-    final profileResult = await _supabase
-        .from('profiles')
-        .insert({
-          'auth_user_id': uid,
-          'display_name': displayName,
-        })
-        .select('id')
-        .single();
-
-    final profileId = profileResult['id'] as String;
-
-    // 2. Insert game profile (display_name denormalised for stream queries)
+    // Insert game profile directly (no hub profile dependency)
     await _supabase.schema('pukhuk').from('players').insert({
-      'profile_id': profileId,
       'auth_uid': uid,
       'display_name': displayName,
     });
@@ -77,13 +64,15 @@ class PlayerRepository {
     if ((rows as List).isEmpty) {
       // Auto-migrate old users or fix broken signups
       try {
-        final profileRows = await _supabase.from('profiles').select().eq('auth_user_id', authUid).limit(1);
-        if ((profileRows as List).isNotEmpty) {
-          final profile = profileRows.first;
+        final user = _supabase.auth.currentUser;
+        if (user != null && user.id == authUid) {
+          final displayName = user.userMetadata?['display_name'] ?? 
+                              user.email?.split('@').first ?? 
+                              'Player';
+                              
           await _supabase.schema('pukhuk').from('players').insert({
-            'profile_id': profile['id'],
             'auth_uid': authUid,
-            'display_name': profile['display_name'] ?? 'Player',
+            'display_name': displayName,
           });
           // Re-fetch
           rows = await _supabase.schema('pukhuk').from('players').select().eq('auth_uid', authUid).limit(1);
