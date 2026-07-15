@@ -28,7 +28,9 @@ class _MatchmakingScreenState extends ConsumerState<MatchmakingScreen> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startSearch());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _startSearchIfReady();
+    });
   }
 
   @override
@@ -37,9 +39,10 @@ class _MatchmakingScreenState extends ConsumerState<MatchmakingScreen> {
     super.dispose();
   }
 
-  void _startSearch() {
+  void _startSearchIfReady() {
     final player = ref.read(currentPlayerProvider).value;
-    if (player == null) return;
+    if (player == null) return; // Will be triggered again by ref.listen in build
+    if (_sub != null) return; // Already searching
 
     final service = ref.read(matchmakingServiceProvider);
     _sub = service.joinQueue(player).listen((state) {
@@ -62,12 +65,23 @@ class _MatchmakingScreenState extends ConsumerState<MatchmakingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Ensure player is loaded, trigger search when ready
+    ref.listen(currentPlayerProvider, (prev, next) {
+      if (next.value != null && _sub == null) {
+        _startSearchIfReady();
+      }
+    });
+
+    final isLoadingPlayer = ref.watch(currentPlayerProvider).isLoading;
+
     return Scaffold(
       appBar: AppBar(title: const Text('FINDING MATCH')),
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (isLoadingPlayer) const CircularProgressIndicator(),
+            if (!isLoadingPlayer) ...[
             const SizedBox(
               width: 90,
               height: 90,
@@ -91,11 +105,14 @@ class _MatchmakingScreenState extends ConsumerState<MatchmakingScreen> {
               '${_state.waitTime.inSeconds}s elapsed · ELO range ±${_state.currentEloTolerance}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
-            const SizedBox(height: 40),
-            OutlinedButton(
-              onPressed: _cancelSearch,
-              child: const Text('CANCEL'),
-            ),
+              const SizedBox(height: 32),
+
+              // Cancel button
+              TextButton(
+                onPressed: _cancelSearch,
+                child: const Text('CANCEL', style: TextStyle(letterSpacing: 2)),
+              ),
+            ],
           ],
         ),
       ),

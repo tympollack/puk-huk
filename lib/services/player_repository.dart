@@ -67,12 +67,32 @@ class PlayerRepository {
 
   // ── One-shot fetch ───────────────────────────────────────────────────────
   Future<PlayerModel?> getPlayer(String authUid) async {
-    final rows = await _supabase
+    var rows = await _supabase
         .schema('pukhuk')
         .from('players')
         .select()
         .eq('auth_uid', authUid)
         .limit(1);
+        
+    if ((rows as List).isEmpty) {
+      // Auto-migrate old users or fix broken signups
+      try {
+        final profileRows = await _supabase.from('profiles').select().eq('auth_user_id', authUid).limit(1);
+        if ((profileRows as List).isNotEmpty) {
+          final profile = profileRows.first;
+          await _supabase.schema('pukhuk').from('players').insert({
+            'profile_id': profile['id'],
+            'auth_uid': authUid,
+            'display_name': profile['display_name'] ?? 'Player',
+          });
+          // Re-fetch
+          rows = await _supabase.schema('pukhuk').from('players').select().eq('auth_uid', authUid).limit(1);
+        }
+      } catch (e) {
+        // ignore fallback errors
+      }
+    }
+    
     if ((rows as List).isEmpty) return null;
     return PlayerModel.fromSupabase(rows.first as Map<String, dynamic>);
   }

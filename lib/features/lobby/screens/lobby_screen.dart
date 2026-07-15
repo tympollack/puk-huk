@@ -89,7 +89,12 @@ class LobbyScreen extends ConsumerWidget {
   }
 
   Future<void> _startBotMatch(BuildContext context, WidgetRef ref, PlayerModel? player) async {
-    if (player == null) return;
+    if (player == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Player profile could not be loaded. Please try logging out and in again.')),
+      );
+      return;
+    }
     
     // Show loading
     showDialog(
