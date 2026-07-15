@@ -115,7 +115,7 @@ class PuckComponent extends BodyComponent {
       if (status != 'knocked_off') {
         status = 'knocked_off';
         for (final fixture in body.fixtures) {
-          fixture.isSensor = true;
+          fixture.setSensor(true);
         }
       }
     }
