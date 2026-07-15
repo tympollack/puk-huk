@@ -11,7 +11,7 @@ part 'auth_provider.g.dart';
 // Raw Supabase auth state — drives the go_router redirect guard.
 // Emits the auth UID (String) when signed in, null when signed out.
 // ─────────────────────────────────────────────────────────────────────────────
-@riverpod
+@Riverpod(keepAlive: true)
 Stream<String?> authState(Ref ref) {
   return Supabase.instance.client.auth.onAuthStateChange
       .map((event) => event.session?.user.id);
@@ -21,7 +21,7 @@ Stream<String?> authState(Ref ref) {
 // Current authenticated player — composite of hub profile + game profile.
 // Null when not signed in or profile not yet created.
 // ─────────────────────────────────────────────────────────────────────────────
-@riverpod
+@Riverpod(keepAlive: true)
 Stream<PlayerModel?> currentPlayer(Ref ref) async* {
   final authValue = ref.watch(authStateProvider).value;
   if (authValue == null) {

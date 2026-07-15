@@ -123,7 +123,7 @@ class LeaderboardService {
 // ─────────────────────────────────────────────────────────────────────────────
 // Provider wrappers for direct widget consumption
 // ─────────────────────────────────────────────────────────────────────────────
-@riverpod
+@Riverpod(keepAlive: true)
 Stream<List<LeaderboardEntry>> globalLeaderboard(Ref ref) {
   return ref.watch(leaderboardServiceProvider).watchGlobalTop();
 }
