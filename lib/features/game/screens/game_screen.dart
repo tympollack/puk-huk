@@ -34,19 +34,39 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       onPuckSettled: _handlePuckSettled,
     );
     
-    // Listen to session to initialize bot if needed
+    // Listen to session to initialize bot if needed and handle turns
     _sessionSub = ref.listenManual(
       gameSessionProvider(widget.sessionId),
       (prev, next) {
         final state = next.value;
         if (state == null) return;
         
+        final player = ref.read(currentPlayerProvider).value;
+        if (player == null) return;
+
+        // 1. Initialize Bot if needed
         if (_botEngine == null && state.scores.containsKey(pukhukBotId)) {
-          final player = ref.read(currentPlayerProvider).value;
-          if (player != null) {
-            _botEngine = BotEngine(ref, widget.sessionId, player);
-            _botEngine!.start();
-          }
+          _botEngine = BotEngine(ref, widget.sessionId, player);
+          _botEngine!.start();
+        }
+
+        // 2. Sync physics engine with the authoritative state
+        _syncBoardState(state.boardState);
+
+        // 3. Spawn puck if it is now the local player's turn
+        final isMyTurn = state.currentTurnPlayerId == player.uid;
+        final wasMyTurn = prev?.value?.currentTurnPlayerId == player.uid;
+        
+        if (isMyTurn && !wasMyTurn && state.status == 'active') {
+          // Add a small delay to ensure physics world is fully loaded if this is the first turn
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (!mounted) return;
+            _game.spawnPuck(
+              ownerId: player.uid,
+              color: PukHukTheme.primary, // Local player color
+              puckId: const Uuid().v4(),
+            );
+          });
         }
       },
       fireImmediately: true,
@@ -60,25 +80,114 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     super.dispose();
   }
 
-  void _handlePuckSettled(PuckComponent puck) {
-    final player = ref.read(currentPlayerProvider).value;
-    if (player == null) return;
+  void _syncBoardState(List<PuckStateModel> boardState) {
+    // Get all current pucks in the physics world
+    final currentPucks = _game.world.children.whereType<PuckComponent>().toList();
+    
+    // Remove pucks that no longer exist in the authoritative state
+    // (e.g. they were knocked off the board)
+    for (final puck in currentPucks) {
+      if (puck.isBeingDragged) continue; // Don't touch the active puck we are throwing
+      final existsInState = boardState.any((p) => p.puckId == puck.puckId);
+      if (!existsInState) {
+        puck.removeFromParent();
+      }
+    }
 
-    // The puck's position is relative to the board centre, but zoneForPosition 
-    // expects 0 to be the launch end and boardLength to be the far end.
-    // In PukHukGame, the board is drawn from (0,0) to (boardLength, width).
-    // The puck's x position maps directly to the distance along the board.
+    // Add or update pucks from the authoritative state
+    for (final pState in boardState) {
+      final existingPuck = currentPucks.where((p) => p.puckId == pState.puckId).firstOrNull;
+      
+      if (existingPuck != null) {
+        if (!existingPuck.isBeingDragged) {
+          // Update position for opponent pucks that might have settled
+          existingPuck.body.setTransform(Vector2(pState.x, pState.y), 0);
+        }
+      } else {
+        // Spawn a new puck that arrived from the state (e.g. opponent threw it)
+        final newPuck = PuckComponent(
+          puckId: pState.puckId,
+          ownerId: pState.ownerId,
+          color: pState.ownerId == pukhukBotId ? PukHukTheme.accent : (pState.ownerId == ref.read(currentPlayerProvider).value?.uid ? PukHukTheme.primary : PukHukTheme.secondary),
+          radius: PukHukGame.puckRadius,
+          friction: PukHukGame.puckFriction,
+          restitution: PukHukGame.puckRestitution,
+          linearDampingValue: PukHukGame.linearDamping,
+          position: Vector2(pState.x, pState.y),
+        );
+        _game.world.add(newPuck);
+      }
+    }
+  }
+
+  void _handlePuckSettled(PuckComponent puck) async {
+    final player = ref.read(currentPlayerProvider).value;
+    final currentState = ref.read(gameSessionProvider(widget.sessionId)).value;
+    
+    if (player == null || currentState == null) return;
+    if (currentState.currentTurnPlayerId != player.uid) return;
+
+    // Collect all pucks currently on the board
+    final currentPucks = _game.world.children.whereType<PuckComponent>().toList();
+    
+    final newBoardState = <PuckStateModel>[];
+    int playerRoundScore = 0;
+    int opponentRoundScore = 0;
+    
+    for (final p in currentPucks) {
+      final xPos = p.body.position.x;
+      
+      // If the puck fell off the board (xPos > boardLength), it's dead
+      if (xPos > PukHukGame.boardLength + 0.1 || xPos < -0.1) continue;
+      
+      final zone = BoardBoundaryComponent.zoneForPosition(xPos, PukHukGame.boardLength);
+      
+      // If it's on the board, keep it in state
+      newBoardState.add(PuckStateModel(
+        puckId: p.puckId,
+        ownerId: p.ownerId,
+        x: p.body.position.x,
+        y: p.body.position.y,
+        status: 'active',
+      ));
+      
+      final pts = ScoringZones.pointsForZone(zone, isHanger: zone == -1);
+      if (p.ownerId == player.uid) {
+        playerRoundScore += pts;
+      } else {
+        opponentRoundScore += pts;
+      }
+    }
+
     final xPos = puck.body.position.x;
     final zone = BoardBoundaryComponent.zoneForPosition(xPos, PukHukGame.boardLength);
     final pointsScored = ScoringZones.pointsForZone(zone, isHanger: zone == -1);
+    
+    final opponentId = currentState.scores.keys.firstWhere((id) => id != player.uid);
 
-    // ref
-    //     .read(turnStatsControllerProvider(widget.sessionId, player.uid).notifier)
-    //     .recordPuckResult(
-    //       speed: puck.peakSpeed,
-    //       distance: puck.totalDistance,
-    //       pointsScored: pointsScored,
-    //     );
+    final newState = currentState.copyWith(
+      turnNumber: currentState.turnNumber + 1,
+      currentTurnPlayerId: opponentId,
+      boardState: newBoardState,
+      lastAction: ActionModel(
+        playerId: player.uid,
+        actionType: 'throw',
+        velocity: puck.peakSpeed,
+        position: puck.totalDistance,
+        pointsScored: pointsScored,
+      ),
+    );
+
+    try {
+      await ref.read(realtimeSyncServiceProvider).submitTurn(
+        matchId: widget.sessionId,
+        playerId: player.uid,
+        expectedTurnNumber: currentState.turnNumber,
+        newState: newState,
+      );
+    } catch (e) {
+      print('Failed to submit turn: $e');
+    }
   }
 
   @override
@@ -136,7 +245,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
-              Navigator.pop(context);
+              context.go(Routes.lobby);
             },
             child: const Text('Forfeit', style: TextStyle(color: PukHukTheme.danger)),
           ),
