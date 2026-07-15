@@ -28,7 +28,7 @@ class PukHukGame extends Forge2DGame with PanDetector {
   static const double puckFriction = 0.15;
   static const double puckRestitution = 0.35;   // bounce off rails
   static const double linearDamping = 0.45;     // simulates wax-strip friction
-  static const double maxLaunchImpulse = 12.0;  // N·s — caps max throw power
+  static const double maxLaunchImpulse = 6.0;  // N·s — caps max throw power
 
   final void Function(PuckComponent puck)? onPuckSettled;
   final void Function(double speed, double distance)? onThrowComplete;

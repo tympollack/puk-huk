@@ -119,6 +119,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           restitution: PukHukGame.puckRestitution,
           linearDampingValue: PukHukGame.linearDamping,
           position: Vector2(pState.x, pState.y),
+          status: pState.status,
         );
         _game.world.add(newPuck);
       }
@@ -142,21 +143,26 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     for (final p in currentPucks) {
       final xPos = p.body.position.x;
       
-      // If the puck fell off the board (xPos > boardLength), it's dead
-      if (xPos > PukHukGame.boardLength + 0.1 || xPos < -0.1) continue;
+      String status = 'active';
+      int pts = 0;
       
-      final zone = BoardBoundaryComponent.zoneForPosition(xPos, PukHukGame.boardLength);
+      // If the puck fell off the board (xPos > boardLength), it's dead (0 points)
+      if (xPos > PukHukGame.boardLength + 0.1 || xPos < -0.1) {
+        status = 'knocked_off';
+      } else {
+        final zone = BoardBoundaryComponent.zoneForPosition(xPos, PukHukGame.boardLength);
+        pts = ScoringZones.pointsForZone(zone, isHanger: zone == -1);
+      }
       
-      // If it's on the board, keep it in state
+      // Add to state regardless of status to maintain object permanence
       newBoardState.add(PuckStateModel(
         puckId: p.puckId,
         ownerId: p.ownerId,
         x: p.body.position.x,
         y: p.body.position.y,
-        status: 'active',
+        status: status,
       ));
       
-      final pts = ScoringZones.pointsForZone(zone, isHanger: zone == -1);
       if (p.ownerId == player.uid) {
         playerRoundScore += pts;
       } else {

@@ -21,6 +21,7 @@ class PuckComponent extends BodyComponent {
   final double restitution;
   final double linearDampingValue;
   final Vector2 _spawnPosition;
+  String status;
 
   PuckComponent({
     required this.puckId,
@@ -31,6 +32,7 @@ class PuckComponent extends BodyComponent {
     required this.restitution,
     required this.linearDampingValue,
     required Vector2 position,
+    this.status = 'active',
   })  : _spawnPosition = position,
         super(renderBody: false);
 
@@ -56,6 +58,7 @@ class PuckComponent extends BodyComponent {
       friction: friction,
       restitution: restitution,
       density: 2.7, // aluminum-ish puck density
+      isSensor: status == 'knocked_off',
     );
 
     final bodyDef = BodyDef(
@@ -76,8 +79,9 @@ class PuckComponent extends BodyComponent {
   // ─────────────────────────────────────────────────────────────────────────
   void previewAimVector(Vector2 dragDelta, double maxImpulse) {
     // Drag backward = pull back; forward = launch direction (slingshot feel)
+    // Scale distance dragged (e.g. 400px max drag) -> [0.0, 1.0] intensity
     final normalized = dragDelta.clone()..scale(-1);
-    final magnitude = (normalized.length / 200.0).clamp(0.0, 1.0);
+    final magnitude = (normalized.length / 400.0).clamp(0.0, 1.0);
     normalized.normalize();
     _aimImpulse = normalized..scale(magnitude * maxImpulse);
   }
@@ -102,6 +106,20 @@ class PuckComponent extends BodyComponent {
   @override
   void update(double dt) {
     super.update(dt);
+    
+    // Gutter check - if puck falls off far edge or goes backwards off the board
+    final pos = body.position;
+    if (pos.x > 3.66 + radius || pos.x < -radius) {
+      body.linearVelocity.setZero();
+      body.angularVelocity = 0.0;
+      if (status != 'knocked_off') {
+        status = 'knocked_off';
+        for (final fixture in body.fixtures) {
+          fixture.isSensor = true;
+        }
+      }
+    }
+
     if (!_isTracking) return;
 
     final velocity = body.linearVelocity;
@@ -128,6 +146,10 @@ class PuckComponent extends BodyComponent {
   // ─────────────────────────────────────────────────────────────────────────
   @override
   void render(Canvas canvas) {
+    if (status == 'knocked_off') {
+      canvas.saveLayer(null, Paint()..color = const Color(0x66FFFFFF)); // dim to 40%
+    }
+  
     final speed = body.linearVelocity.length;
     final speedRatio = (speed / 3.0).clamp(0.0, 1.0); // normalize vs ~3 m/s max
 
@@ -176,6 +198,10 @@ class PuckComponent extends BodyComponent {
         ..strokeWidth = radius * 0.3
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
       canvas.drawCircle(Offset.zero, radius * 1.1, glowPaint);
+    }
+    
+    if (status == 'knocked_off') {
+      canvas.restore();
     }
   }
 }
