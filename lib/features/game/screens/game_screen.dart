@@ -1,9 +1,14 @@
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../../core/providers/auth_provider.dart';
+import '../../../core/router/app_router.dart';
 import '../../../core/theme/puk_huk_theme.dart';
+import '../../../data/models/game_session_model.dart';
+import '../../../services/realtime_sync_service.dart';
 import '../engine/board_boundary_component.dart';
 import '../engine/puck_component.dart';
 import '../engine/puk_huk_game.dart';
@@ -64,7 +69,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
             _game.spawnPuck(
               ownerId: player.uid,
               color: PukHukTheme.primary, // Local player color
-              puckId: const Uuid().v4(),
+              puckId: Uuid().v4(),
             );
           });
         }
@@ -87,7 +92,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     // Remove pucks that no longer exist in the authoritative state
     // (e.g. they were knocked off the board)
     for (final puck in currentPucks) {
-      if (puck.isBeingDragged) continue; // Don't touch the active puck we are throwing
+      if (puck == _game.activePuck) continue; // Don't touch the active puck we are throwing
       final existsInState = boardState.any((p) => p.puckId == puck.puckId);
       if (!existsInState) {
         puck.removeFromParent();
@@ -99,7 +104,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       final existingPuck = currentPucks.where((p) => p.puckId == pState.puckId).firstOrNull;
       
       if (existingPuck != null) {
-        if (!existingPuck.isBeingDragged) {
+        if (existingPuck != _game.activePuck) {
           // Update position for opponent pucks that might have settled
           existingPuck.body.setTransform(Vector2(pState.x, pState.y), 0);
         }
@@ -108,7 +113,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         final newPuck = PuckComponent(
           puckId: pState.puckId,
           ownerId: pState.ownerId,
-          color: pState.ownerId == pukhukBotId ? PukHukTheme.accent : (pState.ownerId == ref.read(currentPlayerProvider).value?.uid ? PukHukTheme.primary : PukHukTheme.secondary),
+          color: pState.ownerId == pukhukBotId ? PukHukTheme.secondary : (pState.ownerId == ref.read(currentPlayerProvider).value?.uid ? PukHukTheme.primary : PukHukTheme.secondary),
           radius: PukHukGame.puckRadius,
           friction: PukHukGame.puckFriction,
           restitution: PukHukGame.puckRestitution,
@@ -171,10 +176,11 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       boardState: newBoardState,
       lastAction: ActionModel(
         playerId: player.uid,
-        actionType: 'throw',
-        velocity: puck.peakSpeed,
-        position: puck.totalDistance,
-        pointsScored: pointsScored,
+        vectorX: puck.body.linearVelocity.x,
+        vectorY: puck.body.linearVelocity.y,
+        rotation: puck.body.angularVelocity,
+        force: puck.peakSpeed,
+        timestamp: DateTime.now(),
       ),
     );
 

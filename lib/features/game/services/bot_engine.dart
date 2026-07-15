@@ -95,7 +95,7 @@ class BotEngine {
 
     // Create a new puck
     final newPuck = PuckStateModel(
-      puckId: const Uuid().v4(),
+      puckId: Uuid().v4(),
       ownerId: pukhukBotId,
       x: finalX,
       y: finalY,

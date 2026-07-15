@@ -37,6 +37,7 @@ class PukHukGame extends Forge2DGame with PanDetector {
       : super(gravity: Vector2.zero()); // top-down view — no gravity
 
   PuckComponent? _activePuck;
+  PuckComponent? get activePuck => _activePuck;
   Vector2? _dragStart;
 
   @override
