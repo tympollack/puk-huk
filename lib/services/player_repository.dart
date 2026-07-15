@@ -40,16 +40,16 @@ class PlayerRepository {
 
   // ── Real-time stream of the current player's game profile ────────────────
   // Uses .stream() which subscribes via Supabase Realtime automatically.
-  Stream<PlayerModel?> watchPlayer(String authUid) {
-    return _supabase
+  Future<PlayerModel?> watchPlayer(String authUid) async {
+    final rows = await _supabase
         .schema('pukhuk')
         .from('players')
-        .stream(primaryKey: ['id'])
+        .select()
         .eq('auth_uid', authUid)
-        .map((rows) {
-          if (rows.isEmpty) return null;
-          return PlayerModel.fromSupabase(rows.first);
-        });
+        .limit(1);
+    
+    if (rows.isEmpty) return null;
+    return PlayerModel.fromSupabase(rows.first);
   }
 
   // ── One-shot fetch ───────────────────────────────────────────────────────

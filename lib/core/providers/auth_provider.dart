@@ -22,17 +22,16 @@ Stream<String?> authState(Ref ref) {
 // Null when not signed in or profile not yet created.
 // ─────────────────────────────────────────────────────────────────────────────
 @Riverpod(keepAlive: true)
-Stream<PlayerModel?> currentPlayer(Ref ref) async* {
+Future<PlayerModel?> currentPlayer(Ref ref) async {
   final authValue = ref.watch(authStateProvider).value;
   if (authValue == null) {
-    yield null;
-    return;
+    return null;
   }
   
-  // Ensure the player profile exists (will auto-create if missing) before streaming
+  // Ensure the player profile exists (will auto-create if missing) before fetching
   await ref.read(playerRepositoryProvider).getPlayer(authValue);
   
-  yield* ref.read(playerRepositoryProvider).watchPlayer(authValue);
+  return ref.read(playerRepositoryProvider).watchPlayer(authValue);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

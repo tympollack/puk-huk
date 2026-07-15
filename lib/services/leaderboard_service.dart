@@ -25,23 +25,23 @@ class LeaderboardService {
 
   /// Real-time global top-N leaderboard, ordered by ELO descending.
   /// Supabase .stream() automatically subscribes via Realtime.
-  Stream<List<LeaderboardEntry>> watchGlobalTop({int limit = 100}) {
-    return _supabase
+  Future<List<LeaderboardEntry>> getGlobalTop({int limit = 100}) async {
+    final rows = await _supabase
         .schema('pukhuk')
         .from('players')
-        .stream(primaryKey: ['id'])
+        .select()
         .order('elo', ascending: false)
-        .limit(limit)
-        .map((rows) {
-          final entries = rows
-              .map(LeaderboardEntry.fromSupabase)
-              .toList();
-          // Assign display rank client-side (1-indexed within this result set)
-          for (var i = 0; i < entries.length; i++) {
-            entries[i] = entries[i].copyWith(rank: i + 1);
-          }
-          return entries;
-        });
+        .limit(limit);
+
+    final entries = (rows as List)
+        .cast<Map<String, dynamic>>()
+        .map(LeaderboardEntry.fromSupabase)
+        .toList();
+
+    for (var i = 0; i < entries.length; i++) {
+      entries[i] = entries[i].copyWith(rank: i + 1);
+    }
+    return entries;
   }
 
   /// "Local" leaderboard — players within ±[range] ELO of the current player.
@@ -124,6 +124,6 @@ class LeaderboardService {
 // Provider wrappers for direct widget consumption
 // ─────────────────────────────────────────────────────────────────────────────
 @Riverpod(keepAlive: true)
-Stream<List<LeaderboardEntry>> globalLeaderboard(Ref ref) {
-  return ref.watch(leaderboardServiceProvider).watchGlobalTop();
+Future<List<LeaderboardEntry>> globalLeaderboard(Ref ref) async {
+  return ref.read(leaderboardServiceProvider).getGlobalTop();
 }
