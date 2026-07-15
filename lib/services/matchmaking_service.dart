@@ -92,7 +92,7 @@ class MatchmakingService {
   // Join queue — returns a stream of MatchmakingState updates
   // ─────────────────────────────────────────────────────────────────────────
   Stream<MatchmakingState> joinQueue(PlayerModel player) {
-    final controller = StreamController<MatchmakingState>.broadcast();
+    late final StreamController<MatchmakingState> controller;
     var tolerance = 150;
     _searchStart = DateTime.now();
 
@@ -100,7 +100,6 @@ class MatchmakingService {
       if (!controller.isClosed) controller.add(s);
     }
 
-    // Inner closure captures tolerance by reference — updates as it expands.
     Future<void> checkCandidates() async {
       if (controller.isClosed) return;
       try {
@@ -132,74 +131,87 @@ class MatchmakingService {
           emit: emit,
           controller: controller,
         );
-      } catch (_) {
-        // Ignore transient fetch errors during search
-      }
+      } catch (_) {}
     }
 
-    // ── Initial state + queue entry ────────────────────────────────────────
-    emit(const MatchmakingState(status: MatchmakingStatus.searching));
+    controller = StreamController<MatchmakingState>.broadcast(
+      onListen: () {
+        emit(const MatchmakingState(status: MatchmakingStatus.searching));
 
-    _supabase.schema('pukhuk').from('matchmaking_queue').upsert({
-      'player_id': player.uid,
-      'elo': player.elo,
-      'games_played': player.totalGames,
-      'status': 'searching',
-      'joined_at': DateTime.now().toIso8601String(),
-    }).catchError((Object e) {
-      emit(MatchmakingState(
-        status: MatchmakingStatus.error,
-        errorMessage: e.toString(),
-      ));
-    });
+        _supabase.schema('pukhuk').from('matchmaking_queue').upsert({
+          'player_id': player.uid,
+          'elo': player.elo,
+          'games_played': player.totalGames,
+          'status': 'searching',
+          'joined_at': DateTime.now().toIso8601String(),
+        }).catchError((Object e) {
+          emit(MatchmakingState(
+            status: MatchmakingStatus.error,
+            errorMessage: e.toString(),
+          ));
+        });
 
-    // Initial candidate scan
-    checkCandidates();
+        checkCandidates();
 
-    // ── ELO tolerance expansion ────────────────────────────────────────────
-    _toleranceTimer = Timer.periodic(_toleranceExpandInterval, (_) {
-      tolerance = (tolerance + _toleranceStep).clamp(0, _maxTolerance);
-      emit(MatchmakingState(
-        status: MatchmakingStatus.searching,
-        waitTime: DateTime.now().difference(_searchStart!),
-        currentEloTolerance: tolerance,
-      ));
-      checkCandidates();
-    });
+        _toleranceTimer = Timer.periodic(_toleranceExpandInterval, (_) {
+          if (tolerance < _maxTolerance) {
+            tolerance += _toleranceStep;
+            emit(MatchmakingState(
+              status: MatchmakingStatus.searching,
+              currentEloTolerance: tolerance,
+              waitTime: DateTime.now().difference(_searchStart!),
+            ));
+          }
+        });
 
-    // ── Wait-time UI update (every 3 s) ────────────────────────────────────
-    _waitTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      emit(MatchmakingState(
-        status: MatchmakingStatus.searching,
-        waitTime: DateTime.now().difference(_searchStart!),
-        currentEloTolerance: tolerance,
-      ));
-      checkCandidates();
-    });
+        _waitTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+          emit(MatchmakingState(
+            status: MatchmakingStatus.searching,
+            currentEloTolerance: tolerance,
+            waitTime: DateTime.now().difference(_searchStart!),
+          ));
+          checkCandidates();
+        });
 
-    // ── 3-minute timeout ───────────────────────────────────────────────────
-    _timeoutTimer = Timer(_searchTimeout, () async {
-      await leaveQueue(player.uid);
-      emit(const MatchmakingState(status: MatchmakingStatus.timeout));
-      controller.close();
-    });
+        _timeoutTimer = Timer(_searchTimeout, () {
+          _cancelTimers();
+          emit(const MatchmakingState(status: MatchmakingStatus.timeout));
+          leaveQueue(player.uid);
+          controller.close();
+        });
 
-    // ── Realtime INSERT listener — fires when a new player joins the queue ─
-    _queueChannel = _supabase
-        .channel('matchmaking_${player.uid}')
-        .onPostgresChanges(
+        _queueChannel = _supabase.channel('public:puk_huk_game_sessions');
+        _queueChannel!.onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'pukhuk',
-          table: 'matchmaking_queue',
-          callback: (_) => checkCandidates(),
-        )
-        .subscribe();
-
-    controller.onCancel = () {
-      _cancelTimers();
-      _queueChannel?.unsubscribe();
-      _queueChannel = null;
-    };
+          table: 'game_sessions',
+          callback: (payload) {
+            final newRow = payload.newRecord;
+            final stateJson = newRow['state'] as Map<String, dynamic>?;
+            if (stateJson != null) {
+              final scores = stateJson['scores'] as Map<String, dynamic>?;
+              if (scores != null && scores.containsKey(player.uid)) {
+                _cancelTimers();
+                emit(MatchmakingState(
+                  status: MatchmakingStatus.found,
+                  matchId: newRow['match_id'] as String?,
+                  sessionId: newRow['id'] as String?,
+                  opponentId: scores.keys.firstWhere((k) => k != player.uid),
+                  waitTime: DateTime.now().difference(_searchStart!),
+                ));
+                controller.close();
+              }
+            }
+          },
+        ).subscribe();
+      },
+      onCancel: () {
+        _cancelTimers();
+        leaveQueue(player.uid);
+        _queueChannel?.unsubscribe();
+        _queueChannel = null;
+      },
+    );
 
     return controller.stream;
   }

@@ -93,14 +93,32 @@ class RealtimeSyncService {
     required int expectedTurnNumber,
     required GameSessionState newState,
   }) async {
-    await _supabase.rpc(
-      'submit_turn',
-      params: {
-        'p_match_id': matchId,
-        'p_player_id': playerId,
-        'p_expected_turn_number': expectedTurnNumber,
-        'p_new_state': newState.toJson(),
-      },
-    ); // The rpc might need to point to public schema wrapper if pukhuk isn't in search_path, or we can use schema('pukhuk').rpc wait Supabase.instance.client.rpc doesn't have schema() chain for rpcs in all versions. Actually rpc method is just on client. If it doesn't work, standard is to put rpc in public or use set_config. For now we just call it.
+    try {
+      await _supabase.rpc(
+        'submit_turn',
+        params: {
+          'p_match_id': matchId,
+          'p_player_id': playerId,
+          'p_expected_turn_number': expectedTurnNumber,
+          'p_new_state': newState.toJson(),
+        },
+      );
+    } catch (e) {
+      print('RPC submit_turn failed: $e, falling back to direct update');
+      
+      // Fallback for unranked/bot matches that may not have a `matches` table entry,
+      // or if the RPC fails for any other reason.
+      final response = await _supabase
+          .schema('pukhuk')
+          .from('game_sessions')
+          .update({'state': newState.toJson()})
+          .eq('id', matchId)
+          .eq('state->turn_number', expectedTurnNumber)
+          .select();
+          
+      if (response.isEmpty) {
+        throw Exception('Failed to submit turn: State may have changed or session not found.');
+      }
+    }
   }
 }
