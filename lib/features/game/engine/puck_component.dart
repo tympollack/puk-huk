@@ -83,10 +83,9 @@ class PuckComponent extends BodyComponent {
     final angle = math.atan2(dragDelta.y, dragDelta.x);
     body.setTransform(body.position, angle);
 
-    // Drag backward = pull back; forward = launch direction (slingshot feel)
-    // Scale distance dragged (e.g. 1000px max drag) -> [0.0, 1.0] intensity
+    // Scale distance dragged (e.g. 350px max drag) -> [0.0, 1.0] intensity
     final normalized = dragDelta.clone()..scale(-1);
-    final magnitude = (normalized.length / 1000.0).clamp(0.0, 1.0);
+    final magnitude = (normalized.length / 350.0).clamp(0.0, 1.0);
     normalized.normalize();
     _aimImpulse = normalized..scale(magnitude * maxImpulse);
   }
