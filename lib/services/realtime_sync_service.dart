@@ -15,6 +15,7 @@ RealtimeSyncService realtimeSyncService(Ref ref) =>
 class RealtimeSyncService {
   final SupabaseClient _supabase;
   final Map<String, RealtimeChannel> _channels = {};
+  final Map<String, StreamController<GameSessionState>> _sessionControllers = {};
 
   RealtimeSyncService(this._supabase);
 
@@ -31,7 +32,12 @@ class RealtimeSyncService {
   }
 
   Stream<GameSessionState> watchSession(String sessionId) {
+    if (_sessionControllers.containsKey(sessionId)) {
+      return _sessionControllers[sessionId]!.stream;
+    }
+
     final controller = StreamController<GameSessionState>.broadcast();
+    _sessionControllers[sessionId] = controller;
 
     Future<void> fetchAndEmit() async {
       try {
@@ -81,6 +87,7 @@ class RealtimeSyncService {
     controller.onCancel = () async {
       await channel.unsubscribe();
       _channels.remove(sessionId);
+      _sessionControllers.remove(sessionId);
       controller.close();
     };
 
@@ -109,6 +116,9 @@ class RealtimeSyncService {
       if (response.isEmpty) {
         throw Exception('Failed to submit turn: State may have changed or session not found.');
       }
+      
+      // Optimistic local update
+      _sessionControllers[matchId]?.add(newState);
       return;
     }
 
@@ -137,5 +147,8 @@ class RealtimeSyncService {
         throw Exception('Failed to submit turn: State may have changed or session not found.');
       }
     }
+    
+    // Optimistic local update
+    _sessionControllers[matchId]?.add(newState);
   }
 }
