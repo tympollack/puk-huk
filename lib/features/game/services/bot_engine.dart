@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flame/components.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
@@ -13,50 +14,28 @@ import '../../../data/models/player_model.dart';
 const String pukhukBotId = '00000000-0000-0000-0000-000000000000';
 
 class BotEngine {
-  final WidgetRef ref;
-  final String sessionId;
-  final PlayerModel localPlayer;
-
-  ProviderSubscription? _subscription;
-  bool _isTakingTurn = false;
   final Random _rng = Random();
 
-  BotEngine(this.ref, this.sessionId, this.localPlayer);
+  BotEngine();
 
-  void start() {
-    _subscription = ref.listenManual<AsyncValue<GameSessionState>>(
-      gameSessionProvider(sessionId),
-      (previous, next) {
-        final state = next.value;
-        if (state == null) return;
-
-        if (state.currentTurnPlayerId == pukhukBotId && !_isTakingTurn) {
-          _takeTurn(state);
-        }
-      },
-      fireImmediately: true,
-    );
-  }
-
-  void stop() {
-    _subscription?.close();
-  }
-
-  Future<void> _takeTurn(GameSessionState state) async {
-    _isTakingTurn = true;
+  /// Calculates the bot's throw impulse based on the current state and player skill
+  Future<Vector2> calculateBotImpulse({
+    required GameSessionState state,
+    required PlayerModel localPlayer,
+  }) async {
 
     // Simulate thinking delay (1.5s - 3s)
     final delayMs = 1500 + _rng.nextInt(1500);
     await Future.delayed(Duration(milliseconds: delayMs));
 
-    // Simple AI: aim for the 3-point zone (approx 3.4m from start)
-    // Board is 3.66m x 0.56m. Start is (0.25, 0.28). Target is (3.4, 0.28).
-    double targetX = 3.4;
-    double targetY = 0.28;
+    // Simple AI: aim for the 3-point zone (approx 0.25m from far edge)
+    // Board is 0.56m wide, 3.66m long. Start is (0.28, 3.4). Target is (0.28, 0.25).
+    double targetX = 0.28;
+    double targetY = 0.25;
 
     // Calculate baseline vector
-    double dx = targetX - 0.25;
-    double dy = targetY - 0.28;
+    double dx = targetX - 0.28;
+    double dy = targetY - 3.4;
 
     // Perturbation based on player's unranked ELO
     // ELO 1000 = high variance, ELO 2000 = low variance
@@ -71,57 +50,11 @@ class BotEngine {
     dy += (maxNoiseY * _rng.nextDouble()) - (maxNoiseY / 2);
 
     // Baseline force required to reach 3.4m (heuristic approximation)
-    double baseForce = 7.5;
-    double forceNoise = 1.5 * skillInverse;
+    // Tweak this baseForce to make the bot shoot harder or softer.
+    double baseForce = 2.8;
+    double forceNoise = 0.5 * skillInverse;
     double appliedForce = baseForce + ((_rng.nextDouble() * forceNoise) - (forceNoise / 2));
 
-    // Construct the bot's turn action
-    final action = ActionModel(
-      playerId: pukhukBotId,
-      vectorX: dx,
-      vectorY: dy,
-      rotation: 0,
-      force: appliedForce,
-      timestamp: DateTime.now(),
-    );
-
-    // Simplified kinematic destination
-    double finalX = 0.25 + dx;
-    double finalY = 0.28 + dy;
-    
-    // Clamp to board boundaries
-    finalX = max(0.038, min(3.66 - 0.038, finalX));
-    finalY = max(0.038, min(0.56 - 0.038, finalY));
-
-    // Create a new puck
-    final newPuck = PuckStateModel(
-      puckId: Uuid().v4(),
-      ownerId: pukhukBotId,
-      x: finalX,
-      y: finalY,
-      status: 'active',
-    );
-
-    final newBoard = List<PuckStateModel>.from(state.boardState)..add(newPuck);
-    
-    final newState = state.copyWith(
-      turnNumber: state.turnNumber + 1,
-      currentTurnPlayerId: localPlayer.uid,
-      lastAction: action,
-      boardState: newBoard,
-    );
-
-    try {
-      await ref.read(realtimeSyncServiceProvider).submitTurn(
-        matchId: sessionId, // matchId is same as sessionId for bot matches
-        playerId: pukhukBotId,
-        expectedTurnNumber: state.turnNumber,
-        newState: newState,
-      );
-    } catch (e) {
-      print('Bot failed to submit turn: $e');
-    }
-
-    _isTakingTurn = false;
+    return Vector2(dx, dy)..normalize()..scale(appliedForce * 0.01);
   }
 }

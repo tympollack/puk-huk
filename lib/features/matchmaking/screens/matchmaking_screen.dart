@@ -60,7 +60,11 @@ class _MatchmakingScreenState extends ConsumerState<MatchmakingScreen> {
     if (player != null) {
       ref.read(matchmakingServiceProvider).leaveQueue(player.uid);
     }
-    context.pop();
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go(Routes.lobby);
+    }
   }
 
   @override

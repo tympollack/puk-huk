@@ -1,30 +1,52 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:puk_huk/main.dart';
+import 'package:puk_huk/features/game/engine/board_boundary_component.dart';
+import 'package:puk_huk/features/game/providers/game_providers.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const PukHukApp());
+  group('BoardBoundaryComponent & ScoringZones Tests', () {
+    const double boardLength = 3.66;
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    test('zoneForPosition accurately detects scoring zones and hangers', () {
+      // Launch position (y = 3.66): distance = 0 -> not scored
+      expect(BoardBoundaryComponent.zoneForPosition(3.66, boardLength), equals(0));
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+      // Mid-field (y = 1.83): distance = 1.83 (fraction = 0.50) -> not scored (< 0.66)
+      expect(BoardBoundaryComponent.zoneForPosition(1.83, boardLength), equals(0));
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+      // Zone 1: fraction between 0.66 and 0.77 (distance ~ 2.5m -> y ~ 1.16m)
+      expect(BoardBoundaryComponent.zoneForPosition(1.16, boardLength), equals(1));
+
+      // Zone 2: fraction between 0.77 and 0.88 (distance ~ 2.9m -> y ~ 0.76m)
+      expect(BoardBoundaryComponent.zoneForPosition(0.76, boardLength), equals(2));
+
+      // Zone 3: fraction between 0.88 and 0.98 (distance ~ 3.3m -> y ~ 0.36m)
+      expect(BoardBoundaryComponent.zoneForPosition(0.36, boardLength), equals(3));
+
+      // Hanger Zone: fraction >= 0.98 (distance ~ 3.6m -> y ~ 0.05m)
+      expect(BoardBoundaryComponent.zoneForPosition(0.05, boardLength), equals(-1));
+    });
+
+    test('ScoringZones calculates correct points per zone', () {
+      expect(ScoringZones.pointsForZone(1), equals(1));
+      expect(ScoringZones.pointsForZone(2), equals(2));
+      expect(ScoringZones.pointsForZone(3), equals(3));
+      expect(ScoringZones.pointsForZone(4), equals(4));
+      expect(ScoringZones.pointsForZone(-1, isHanger: true), equals(ScoringZones.hangerBonus));
+      expect(ScoringZones.pointsForZone(0), equals(0));
+    });
+
+    test('TelemetryState holds speed, angle, spin, and aim status', () {
+      const state = TelemetryState(
+        velocity: 4.8,
+        angle: -3.5,
+        spin: 1.2,
+        isAiming: true,
+      );
+
+      expect(state.velocity, equals(4.8));
+      expect(state.angle, equals(-3.5));
+      expect(state.spin, equals(1.2));
+      expect(state.isAiming, isTrue);
+    });
   });
 }

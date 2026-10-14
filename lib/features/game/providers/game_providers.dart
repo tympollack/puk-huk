@@ -33,3 +33,44 @@ abstract class ScoringZones {
     return zonePoints[zone] ?? 0;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live Telemetry Stream (Flame -> UI Bridge)
+// ─────────────────────────────────────────────────────────────────────────────
+class TelemetryState {
+  final double velocity; // m/s
+  final double angle;    // degrees
+  final double spin;     // RPS
+  final bool isAiming;
+
+  const TelemetryState({
+    this.velocity = 0.0,
+    this.angle = 0.0,
+    this.spin = 0.0,
+    this.isAiming = false,
+  });
+}
+
+@riverpod
+class Telemetry extends _$Telemetry {
+  @override
+  TelemetryState build() => const TelemetryState();
+
+  void updateTelemetry({
+    required double velocity,
+    required double angle,
+    required double spin,
+    required bool isAiming,
+  }) {
+    state = TelemetryState(
+      velocity: velocity,
+      angle: angle,
+      spin: spin,
+      isAiming: isAiming,
+    );
+  }
+
+  void reset() {
+    state = const TelemetryState();
+  }
+}

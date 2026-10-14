@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:uuid/uuid.dart';
+import 'package:vector_math/vector_math_64.dart' as vmath;
 
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/router/app_router.dart';
@@ -10,9 +12,11 @@ import '../../../core/theme/puk_huk_theme.dart';
 import '../../../data/models/game_session_model.dart';
 import '../../../services/realtime_sync_service.dart';
 import '../engine/board_boundary_component.dart';
+import '../engine/aim_indicator_component.dart';
 import '../engine/puck_component.dart';
 import '../engine/puk_huk_game.dart';
 import '../hud/game_hud_widget.dart';
+import '../hud/minimap_widget.dart';
 import '../providers/game_providers.dart';
 import '../services/bot_engine.dart';
 
@@ -31,14 +35,51 @@ class _GameScreenState extends ConsumerState<GameScreen> {
   late final PukHukGame _game;
   BotEngine? _botEngine;
   ProviderSubscription? _sessionSub;
+  StreamSubscription? _presenceSub;
+  Timer? _turnTimer;
 
   @override
   void initState() {
     super.initState();
     _game = PukHukGame(
       onPuckSettled: _handlePuckSettled,
+      onTelemetryUpdate: (velocity, angle, spin, isAiming) {
+        if (!mounted) return;
+        ref.read(telemetryProvider.notifier).updateTelemetry(
+          velocity: velocity,
+          angle: angle,
+          spin: spin,
+          isAiming: isAiming,
+        );
+      },
     );
     
+    // Initialize Presence
+    Future.microtask(() {
+      final player = ref.read(currentPlayerProvider).value;
+      if (player != null) {
+        ref.read(realtimeSyncServiceProvider).trackPresence(widget.sessionId, player.uid);
+      }
+      
+      // Watch presence to handle disconnects
+      _presenceSub = ref.read(realtimeSyncServiceProvider).watchPresence(widget.sessionId).listen((presenceState) {
+        if (!mounted || player == null) return;
+        final sessionState = ref.read(gameSessionProvider(widget.sessionId)).value;
+        if (sessionState == null || sessionState.status == 'completed') return;
+        
+        final opponentId = sessionState.scores.keys.firstWhere((id) => id != player.uid, orElse: () => '');
+        if (opponentId.isEmpty || opponentId == pukhukBotId) return;
+
+        final oppPresence = presenceState[opponentId];
+        if (oppPresence == null || (oppPresence is List && oppPresence.isEmpty)) {
+          // Opponent went offline! Auto forfeit if not already paused
+          if (sessionState.status == 'active') {
+             _autoForfeitTurn(sessionState, opponentId, disconnect: true);
+          }
+        }
+      });
+    });
+
     // Listen to session to initialize bot if needed and handle turns
     _sessionSub = ref.listenManual(
       gameSessionProvider(widget.sessionId),
@@ -49,29 +90,122 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         final player = ref.read(currentPlayerProvider).value;
         if (player == null) return;
 
+        // 0. Handle active/paused states
+        _game.isPaused = (state.status == 'paused');
+        
+        if (state.status == 'paused') {
+          // Check if we need to show a dialog
+          final inactivePlayers = state.missedTurns.entries
+            .where((MapEntry<String, int> e) => e.value >= 2)
+            .map((e) => e.key);
+          final inactivePlayerId = inactivePlayers.isNotEmpty ? inactivePlayers.first : null;
+            
+          if (inactivePlayerId != null && inactivePlayerId != player.uid) {
+            // The OPPONENT is inactive. Show dialog to claim win.
+            _showInactivityDialog(state);
+          }
+          return; // Pause the game loop
+        }
+
         // 1. Initialize Bot if needed
         if (_botEngine == null && state.scores.containsKey(pukhukBotId)) {
-          _botEngine = BotEngine(ref, widget.sessionId, player);
-          _botEngine!.start();
+          _botEngine = BotEngine();
         }
 
         // 2. Sync physics engine with the authoritative state
         _syncBoardState(state.boardState);
 
-        // 3. Spawn puck if it is now the local player's turn
+        // 3. Spawn puck if it is now a local turn (player or bot)
         final isMyTurn = state.currentTurnPlayerId == player.uid;
         final wasMyTurn = prev?.value?.currentTurnPlayerId == player.uid;
+        final isBotTurn = state.currentTurnPlayerId == pukhukBotId;
+        final wasBotTurn = prev?.value?.currentTurnPlayerId == pukhukBotId;
         
-        if (isMyTurn && !wasMyTurn && state.status == 'active') {
-          // Add a small delay to ensure physics world is fully loaded if this is the first turn
-          Future.delayed(const Duration(milliseconds: 500), () {
-            if (!mounted) return;
-            _game.spawnPuck(
-              ownerId: player.uid,
-              color: PukHukTheme.primary, // Local player color
-              puckId: Uuid().v4(),
-            );
-          });
+        if (state.status == 'active') {
+          // Turn Timer Logic
+          _turnTimer?.cancel();
+          if (isMyTurn) {
+            final startTime = state.turnStartedAt ?? DateTime.now();
+            final elapsed = DateTime.now().difference(startTime.toLocal()).inSeconds;
+            final remaining = 15 - elapsed;
+            
+            if (remaining <= 0) {
+              _autoForfeitTurn(state, player.uid);
+            } else {
+              _turnTimer = Timer(Duration(seconds: remaining), () {
+                if (mounted) _autoForfeitTurn(state, player.uid);
+              });
+            }
+          }
+
+          if (isMyTurn && !wasMyTurn) {
+            // Add a small delay to ensure physics world is fully loaded if this is the first turn
+            Future.delayed(const Duration(milliseconds: 500), () {
+              if (!mounted) return;
+              _game.spawnPuck(
+                ownerId: player.uid,
+                color: PukHukTheme.primary, // Local player color
+                puckId: Uuid().v4(),
+              );
+            });
+          } else if (isBotTurn && !wasBotTurn && _botEngine != null) {
+            _botEngine!.calculateBotImpulse(state: state, localPlayer: player).then((impulse) async {
+              if (!mounted) return;
+              
+              final startPos = Vector2(PukHukGame.boardWidth / 2, PukHukGame.boardLength - 0.25);
+              final botPuck = PuckComponent(
+                puckId: Uuid().v4(),
+                ownerId: pukhukBotId,
+                color: PukHukTheme.secondary,
+                radius: PukHukGame.puckRadius,
+                friction: PukHukGame.puckFriction,
+                restitution: PukHukGame.puckRestitution,
+                linearDampingValue: PukHukGame.linearDamping,
+                position: startPos,
+              );
+              await _game.world.add(botPuck);
+              
+              // 1. Show aim indicator
+              final aimIndicator = AimIndicatorComponent(puck: botPuck);
+              _game.world.add(aimIndicator);
+              
+              // 2. Animate pullback over 1.5s
+              final int steps = 30;
+              final delayPerStep = 1500 ~/ steps;
+              final dragDirection = -impulse.normalized();
+              // Normalize the impulse magnitude to [0, 1] to calculate drag distance
+              final magnitude = (impulse.length / PukHukGame.maxLaunchImpulse).clamp(0.0, 1.0);
+              
+              for (int i = 1; i <= steps; i++) {
+                if (!mounted) return;
+                double progress = i / steps;
+                
+                // Increase aim indicator strength
+                botPuck.setAimImpulse(impulse * progress);
+                
+                // Physically pull puck backwards up to 0.5 meters
+                final currentPos = startPos + (dragDirection * (progress * 0.5 * magnitude));
+                // Clamp the Y position so it doesn't drag into the physical back rail
+                currentPos.y = currentPos.y.clamp(0.0, PukHukGame.boardLength - PukHukGame.puckRadius - 0.02);
+                botPuck.body.setTransform(currentPos, 0);
+                
+                await Future.delayed(Duration(milliseconds: delayPerStep));
+              }
+              
+              // 3. Hold for 1 second
+              await Future.delayed(const Duration(seconds: 1));
+              
+              if (!mounted) return;
+              
+              // 4. Release and Shoot
+              aimIndicator.removeFromParent();
+              botPuck.setAimImpulse(Vector2.zero());
+              botPuck.body.applyLinearImpulse(impulse);
+              botPuck.startTracking(onSettled: () {
+                _handlePuckSettled(botPuck);
+              });
+            });
+          }
         }
       },
       fireImmediately: true,
@@ -81,8 +215,66 @@ class _GameScreenState extends ConsumerState<GameScreen> {
   @override
   void dispose() {
     _sessionSub?.close();
-    _botEngine?.stop();
+    _presenceSub?.cancel();
+    _turnTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _autoForfeitTurn(GameSessionState currentState, String playerId, {bool disconnect = false}) async {
+    if (!mounted) return;
+    
+    // Increment missed turns for this player
+    final newMissedTurns = Map<String, int>.from(currentState.missedTurns);
+    newMissedTurns[playerId] = disconnect ? 2 : ((newMissedTurns[playerId] ?? 0) + 1);
+    
+    // Determine if game should pause (2 misses)
+    final shouldPause = (newMissedTurns[playerId] ?? 0) >= 2;
+    
+    final opponentId = currentState.scores.keys.firstWhere((id) => id != playerId);
+    final nextTurnPlayerId = shouldPause ? currentState.currentTurnPlayerId : opponentId;
+    
+    final newState = currentState.copyWith(
+      turnNumber: currentState.turnNumber + 1,
+      currentTurnPlayerId: nextTurnPlayerId,
+      turnStartedAt: DateTime.now().toUtc(),
+      missedTurns: newMissedTurns,
+      status: shouldPause ? 'paused' : 'active',
+      // We don't change board state since no puck was thrown
+    );
+
+    // Remove active puck from the board if it was spawned
+    if (_game.activePuck != null && _game.activePuck!.ownerId == playerId) {
+      _game.activePuck!.removeFromParent();
+    }
+
+    await ref.read(realtimeSyncServiceProvider).submitTurn(
+      matchId: widget.sessionId,
+      playerId: playerId,
+      expectedTurnNumber: currentState.turnNumber,
+      newState: newState,
+    );
+  }
+
+  void _showInactivityDialog(GameSessionState state) {
+    if (!mounted) return;
+    
+    // Prevent multiple dialogs
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return _InactivityDialogContent(
+              state: state,
+              sessionId: widget.sessionId,
+            );
+          }
+        );
+      }
+    );
   }
 
   void _syncBoardState(List<PuckStateModel> boardState) {
@@ -131,57 +323,81 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     final currentState = ref.read(gameSessionProvider(widget.sessionId)).value;
     
     if (player == null || currentState == null) return;
-    if (currentState.currentTurnPlayerId != player.uid) return;
+    
+    // Only the local player OR the local bot should process settlements
+    if (currentState.currentTurnPlayerId != player.uid && 
+        currentState.currentTurnPlayerId != pukhukBotId) {
+      return;
+    }
 
     // Collect all pucks currently on the board
     final currentPucks = _game.world.children.whereType<PuckComponent>().toList();
     
     final newBoardState = <PuckStateModel>[];
-    int playerRoundScore = 0;
-    int opponentRoundScore = 0;
     
     for (final p in currentPucks) {
-      final xPos = p.body.position.x;
-      
-      String status = 'active';
-      int pts = 0;
-      
-      // If the puck fell off the board (xPos > boardLength), it's dead (0 points)
-      if (xPos > PukHukGame.boardLength + 0.1 || xPos < -0.1) {
-        status = 'knocked_off';
-      } else {
-        final zone = BoardBoundaryComponent.zoneForPosition(xPos, PukHukGame.boardLength);
-        pts = ScoringZones.pointsForZone(zone, isHanger: zone == -1);
-      }
-      
       // Add to state regardless of status to maintain object permanence
       newBoardState.add(PuckStateModel(
         puckId: p.puckId,
         ownerId: p.ownerId,
         x: p.body.position.x,
         y: p.body.position.y,
-        status: status,
+        status: p.status,
       ));
-      
-      if (p.ownerId == player.uid) {
-        playerRoundScore += pts;
-      } else {
-        opponentRoundScore += pts;
-      }
     }
 
-    final xPos = puck.body.position.x;
-    final zone = BoardBoundaryComponent.zoneForPosition(xPos, PukHukGame.boardLength);
-    final pointsScored = ScoringZones.pointsForZone(zone, isHanger: zone == -1);
-    
     final opponentId = currentState.scores.keys.firstWhere((id) => id != player.uid);
+    // Toggle the turn! If it was the local player's turn, it's now the opponent's. If it was the opponent's (bot), it's now the local player's.
+    var nextTurnPlayerId = currentState.currentTurnPlayerId == player.uid ? opponentId : player.uid;
+    var nextTurnNumber = currentState.turnNumber + 1;
+    var nextBoardState = newBoardState;
+    var newScores = Map<String, int>.from(currentState.scores);
+    var newMissedTurns = Map<String, int>.from(currentState.missedTurns);
+    newMissedTurns[currentState.currentTurnPlayerId] = 0; // Reset missed turns on a successful throw
+
+    // If this was the 8th throw, the round is over! Calculate cancellation scoring.
+    if (currentState.turnNumber == 8) {
+      // 1. Filter out knocked off pucks and sort by Y position (lowest Y is furthest)
+      final validPucks = currentPucks
+          .where((p) => p.status != 'knocked_off')
+          .toList()
+        ..sort((a, b) => a.body.position.y.compareTo(b.body.position.y));
+
+      if (validPucks.isNotEmpty) {
+        final winningPuck = validPucks.first;
+        final roundWinnerId = winningPuck.ownerId;
+        
+        // Find the opponent's best puck (furthest down the board)
+        final bestOpponentPuck = validPucks.where((p) => p.ownerId != roundWinnerId).firstOrNull;
+        final cutoffY = bestOpponentPuck?.body.position.y ?? PukHukGame.boardLength;
+
+        // Calculate score for the winner
+        int roundScore = 0;
+        for (final p in validPucks.where((p) => p.ownerId == roundWinnerId)) {
+          if (p.body.position.y < cutoffY) {
+            final zone = BoardBoundaryComponent.zoneForPosition(p.body.position.y, PukHukGame.boardLength);
+            roundScore += ScoringZones.pointsForZone(zone, isHanger: zone == -1);
+          }
+        }
+        
+        newScores[roundWinnerId] = (newScores[roundWinnerId] ?? 0) + roundScore;
+      }
+
+      // Reset for next round
+      nextTurnNumber = 1;
+      nextBoardState = [];
+      nextTurnPlayerId = player.uid; // Player who threw last (hammer) goes first next round
+    }
 
     final newState = currentState.copyWith(
-      turnNumber: currentState.turnNumber + 1,
-      currentTurnPlayerId: opponentId,
-      boardState: newBoardState,
+      turnNumber: nextTurnNumber,
+      currentTurnPlayerId: nextTurnPlayerId,
+      turnStartedAt: DateTime.now().toUtc(),
+      scores: newScores,
+      boardState: nextBoardState,
+      missedTurns: newMissedTurns,
       lastAction: ActionModel(
-        playerId: player.uid,
+        playerId: currentState.currentTurnPlayerId,
         vectorX: puck.body.linearVelocity.x,
         vectorY: puck.body.linearVelocity.y,
         rotation: puck.body.angularVelocity,
@@ -211,9 +427,33 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            // ── Physics canvas ──────────────────────────────────────────
+            // ── Background Stadium ───────────────────────────────────────
             Positioned.fill(
-              child: GameWidget(game: _game),
+              child: Transform.translate(
+                offset: const Offset(0, -20), // Shifted down 130px from -150
+                child: Image.asset(
+                  'assets/images/stadium_bg.jpg',
+                  fit: BoxFit.cover,
+                  alignment: Alignment.topCenter,
+                ),
+              ),
+            ),
+
+            // ── Physics canvas ──────────────────────────────────────────
+            Positioned(
+              top: 130, // Shifted down 130px to match background image
+              left: 0,
+              right: 0,
+              bottom: (MediaQuery.of(context).size.height * 0.30) - 130, // Preserve exact original bounds, just shifted
+              child: Transform(
+                alignment: FractionalOffset.bottomCenter,
+                transform: vmath.Matrix4.identity()
+                  ..setEntry(3, 2, 0.001) // Perspective projection
+                  ..translate(0.0, -70.0, 0.0) // Original perfect alignment mapping
+                  ..rotateX(-0.95) // Adjust tilt to match image perspective
+                  ..scale(3.2, 3.2, 1.0), // Scale up to match lane width
+                child: GameWidget(game: _game),
+              ),
             ),
 
             // ── HUD overlay ──────────────────────────────────────────────
@@ -225,13 +465,55 @@ class _GameScreenState extends ConsumerState<GameScreen> {
                 ),
               ),
 
+            // ── Minimap (Jumbotron) ──────────────────────────────────────
+            Positioned(
+              top: MediaQuery.of(context).size.height * 0.08, // Down ~8-10%
+              left: 0,
+              right: 0,
+              child: Transform.scale(
+                scale: 0.90, // Shrink Jumbotron slightly less
+                child: Center(
+                  child: Consumer(
+                    builder: (context, ref, _) {
+                      final sessionState = ref.watch(gameSessionProvider(widget.sessionId)).value;
+                      return MinimapWidget(
+                        sessionId: widget.sessionId,
+                        onPuckSelect: (id) {},
+                        themeId: sessionState?.themeId ?? 'cyberpunk',
+                        game: _game,
+                      );
+                    }
+                  ),
+                ),
+              ),
+            ),
+
             // ── Exit button ──────────────────────────────────────────────
             Positioned(
-              top: 8,
-              left: 8,
-              child: IconButton(
-                icon: const Icon(Icons.close, color: PukHukTheme.textSecondary),
-                onPressed: () => _confirmExit(context),
+              top: 10,
+              left: 10,
+              child: InkWell(
+                onTap: () {
+                  context.go('/lobby'); // Back to lobby without forfeit
+                },
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF161A22).withOpacity(0.85),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFF30363D), width: 1.5),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 8),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
+                    ],
+                  ),
+                ),
               ),
             ),
           ],
@@ -263,6 +545,90 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _InactivityDialogContent extends ConsumerStatefulWidget {
+  final GameSessionState state;
+  final String sessionId;
+  
+  const _InactivityDialogContent({required this.state, required this.sessionId});
+
+  @override
+  ConsumerState<_InactivityDialogContent> createState() => _InactivityDialogContentState();
+}
+
+class _InactivityDialogContentState extends ConsumerState<_InactivityDialogContent> {
+  late Timer _timer;
+  int _secondsLeft = 30;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      if (_secondsLeft > 0) {
+        setState(() => _secondsLeft--);
+      } else {
+        timer.cancel();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: Color(0xFF161A22),
+      title: Text('Opponent Inactive', style: TextStyle(color: Colors.white)),
+      content: Text('Your opponent has missed 2 turns or gone offline.\nYou can claim the win in $_secondsLeft seconds.', style: TextStyle(color: Colors.white70)),
+      actions: [
+        TextButton(
+          onPressed: () {
+            // Resume and give them another chance (reset missed turns)
+            Navigator.pop(context);
+            final newState = widget.state.copyWith(
+              status: 'active',
+              missedTurns: {},
+              turnStartedAt: DateTime.now().toUtc(),
+            );
+            ref.read(realtimeSyncServiceProvider).submitTurn(
+              matchId: widget.sessionId,
+              playerId: ref.read(currentPlayerProvider).value!.uid,
+              expectedTurnNumber: widget.state.turnNumber,
+              newState: newState,
+            );
+          },
+          child: Text('WAIT', style: TextStyle(color: Colors.white54)),
+        ),
+        TextButton(
+          onPressed: _secondsLeft > 0 ? null : () {
+            // Claim win
+            Navigator.pop(context);
+            final player = ref.read(currentPlayerProvider).value!;
+            final newScores = Map<String, int>.from(widget.state.scores);
+            newScores[player.uid] = 15; // Auto win
+            
+            final newState = widget.state.copyWith(
+              status: 'completed',
+              scores: newScores,
+            );
+            ref.read(realtimeSyncServiceProvider).submitTurn(
+              matchId: widget.sessionId,
+              playerId: player.uid,
+              expectedTurnNumber: widget.state.turnNumber,
+              newState: newState,
+            );
+          },
+          child: Text('CLAIM WIN', style: TextStyle(color: _secondsLeft > 0 ? Colors.white24 : PukHukTheme.primary, fontWeight: FontWeight.bold)),
+        ),
+      ],
     );
   }
 }
