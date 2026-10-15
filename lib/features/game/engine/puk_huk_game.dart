@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'puck_component.dart';
 import 'board_boundary_component.dart';
 import 'aim_indicator_component.dart';
+import 'particle_emitter_component.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PukHukGame — Forge2D physics world for the shuffleboard table.
@@ -52,6 +53,8 @@ class PukHukGame extends Forge2DGame with PanDetector {
   double _initialPuckX = 0;
   AimIndicatorComponent? _aimIndicator;
   bool isPaused = false;
+  PukHukParticleEmitter? _particleEmitter;
+  PukHukParticleEmitter? get particleEmitter => _particleEmitter;
 
   @override
   Color backgroundColor() => Colors.transparent;
@@ -68,6 +71,9 @@ class PukHukGame extends Forge2DGame with PanDetector {
       length: boardLength,
       width: boardWidth,
     ));
+
+    _particleEmitter = PukHukParticleEmitter();
+    world.add(_particleEmitter!);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -163,6 +169,7 @@ class PukHukGame extends Forge2DGame with PanDetector {
       }
       _activePuck = null;
     }
+    _particleEmitter?.clear();
     _dragStart = null;
     _aimStart = null;
     _isAiming = false;

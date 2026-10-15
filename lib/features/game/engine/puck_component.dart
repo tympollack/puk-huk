@@ -4,6 +4,7 @@ import 'package:flame_forge2d/flame_forge2d.dart';
 import 'package:flutter/material.dart';
 
 import 'puk_huk_game.dart';
+import 'board_boundary_component.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PuckComponent — a single shuffleboard puck with full physics simulation.
@@ -15,8 +16,9 @@ import 'puk_huk_game.dart';
 //   • Spin physics visualization → dynamic angular vortex arcs scaling with
 //     Box2D body.angularVelocity
 //   • Settling → subtle glow fade as puck decelerates below rest threshold
+//   • Trailing dust & collision sparks via PukHukParticleEmitter
 // ─────────────────────────────────────────────────────────────────────────────
-class PuckComponent extends BodyComponent {
+class PuckComponent extends BodyComponent with ContactCallbacks {
   PukHukGame? get _game => game is PukHukGame ? (game as PukHukGame) : null;
   final String puckId;
   final String ownerId;
@@ -47,6 +49,7 @@ class PuckComponent extends BodyComponent {
   Vector2 _lastPosition = Vector2.zero();
   bool _isTracking = false;
   VoidCallback? _onSettledCallback;
+  double _dustTimer = 0.0;
 
   // ── Aim preview (drag-to-launch) ────────────────────────────────────────
   Vector2 _aimImpulse = Vector2.zero();
@@ -135,10 +138,27 @@ class PuckComponent extends BodyComponent {
       }
     }
 
-    if (!_isTracking) return;
-
+    // Custom non-linear friction at low speeds to prevent infinite sliding
     final velocity = body.linearVelocity;
     final speed = velocity.length;
+
+    if (speed > 0 && speed < 0.6) {
+      // Increase damping significantly at low speeds (static friction effect)
+      body.linearDamping = linearDampingValue + (0.6 - speed) * 8.0;
+    } else {
+      body.linearDamping = linearDampingValue;
+    }
+
+    // Emit trailing sand/wax friction dust while sliding (any active moving puck)
+    if (speed > 0.15 && status != 'knocked_off') {
+      _dustTimer += dt;
+      if (_dustTimer >= 0.04) {
+        _dustTimer = 0.0;
+        _game?.particleEmitter?.emitDust(body.position, velocity);
+      }
+    }
+
+    if (!_isTracking) return;
 
     // Track peak speed
     if (speed > peakSpeed) peakSpeed = speed;
@@ -157,20 +177,31 @@ class PuckComponent extends BodyComponent {
       _game!.onTelemetryUpdate!(speed, angleDeg, spinRps, false);
     }
 
-    // Custom non-linear friction at low speeds to prevent infinite sliding
-    if (speed > 0 && speed < 0.6) {
-      // Increase damping significantly at low speeds (static friction effect)
-      body.linearDamping = linearDampingValue + (0.6 - speed) * 8.0;
-    } else {
-      body.linearDamping = linearDampingValue;
-    }
-
     // Detect rest state → throw complete
     if (speed < _restThreshold && peakSpeed > 0.05) {
       _isTracking = false;
       _onSettledCallback?.call();
       _onSettledCallback = null;
       _game?.onTelemetryUpdate?.call(0.0, 0.0, 0.0, false);
+    }
+  }
+
+  @override
+  void beginContact(Object other, Contact contact) {
+    super.beginContact(other, contact);
+    if (other is BoardBoundaryComponent) {
+      final worldManifold = WorldManifold();
+      contact.getWorldManifold(worldManifold);
+      final normal = worldManifold.normal;
+      // Calculate impact speed along contact normal
+      final normalImpactSpeed = (body.linearVelocity.dot(normal)).abs();
+
+      if (normalImpactSpeed > 0.15) {
+        final contactPoint = worldManifold.points.isNotEmpty
+            ? worldManifold.points[0]
+            : body.position;
+        _game?.particleEmitter?.emitSparks(contactPoint, normal, impactSpeed: normalImpactSpeed);
+      }
     }
   }
 
