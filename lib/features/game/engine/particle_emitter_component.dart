@@ -178,12 +178,12 @@ class PukHukParticleEmitter extends Component {
         continue;
       }
 
-      // Physics integration with friction decay
-      p.position.add(p.velocity * dt);
+      // Physics integration with frame-rate independent friction decay (zero allocation)
+      p.position.addScaled(p.velocity, dt);
       if (p.type == PukParticleType.dust) {
-        p.velocity.scale(0.88);
+        p.velocity.scale(math.pow(0.88, dt * 60).toDouble());
       } else {
-        p.velocity.scale(0.92);
+        p.velocity.scale(math.pow(0.92, dt * 60).toDouble());
       }
     }
   }
@@ -208,11 +208,12 @@ class PukHukParticleEmitter extends Component {
           ..color = currentColor
           ..strokeWidth = currentSize;
 
-        // Draw spark streak pointing back along velocity vector
-        final tail = p.position - (p.velocity * 0.025);
+        // Draw spark streak pointing back along velocity vector (zero vector allocation)
+        final tailX = p.position.x - p.velocity.x * 0.025;
+        final tailY = p.position.y - p.velocity.y * 0.025;
         canvas.drawLine(
           Offset(p.position.x, p.position.y),
-          Offset(tail.x, tail.y),
+          Offset(tailX, tailY),
           _sparkPaint,
         );
       }
