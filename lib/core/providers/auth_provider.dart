@@ -34,6 +34,20 @@ Future<PlayerModel?> currentPlayer(Ref ref) async {
   return ref.read(playerRepositoryProvider).watchPlayer(authValue);
 }
 
+@riverpod
+Stream<PlayerModel?> playerById(Ref ref, String uid) {
+  if (uid == 'bot_pukhuk') {
+    return Stream.value(PlayerModel(
+      uid: 'bot_pukhuk',
+      displayName: 'PUK_HUK_BOT',
+      elo: 1500,
+      totalGames: 0,
+      wins: 0,
+    ));
+  }
+  return ref.watch(playerRepositoryProvider).watchPlayer(uid).asStream();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthService — sign in / sign up / sign out via Supabase Auth
 // ─────────────────────────────────────────────────────────────────────────────

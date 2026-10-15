@@ -40,9 +40,14 @@ abstract class ActionModel with _$ActionModel {
 @freezed
 abstract class GameSessionState with _$GameSessionState {
   const factory GameSessionState({
-    required String status, // 'active', 'completed'
+    required String status, // 'active', 'paused', 'completed'
+    @JsonKey(name: 'theme_id') @Default('cyberpunk') String themeId,
     @JsonKey(name: 'turn_number') required int turnNumber,
     @JsonKey(name: 'current_turn_player_id') required String currentTurnPlayerId,
+    @JsonKey(name: 'turn_started_at') DateTime? turnStartedAt,
+    @JsonKey(name: 'missed_turns') @Default({}) Map<String, int> missedTurns,
+    @JsonKey(name: 'reserve_time') @Default({}) Map<String, int> reserveTime, // 30s continuous penalty timer
+    @JsonKey(name: 'pauses_used') @Default({}) Map<String, int> pausesUsed,
     required Map<String, int> scores,
     @JsonKey(name: 'last_action') ActionModel? lastAction,
     @JsonKey(name: 'board_state') @Default([]) List<PuckStateModel> boardState,

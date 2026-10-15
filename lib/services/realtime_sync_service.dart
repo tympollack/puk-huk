@@ -16,13 +16,17 @@ class RealtimeSyncService {
   final SupabaseClient _supabase;
   final Map<String, RealtimeChannel> _channels = {};
   final Map<String, StreamController<GameSessionState>> _sessionControllers = {};
+  final Map<String, StreamController<Map<String, dynamic>>> _presenceControllers = {};
 
   RealtimeSyncService(this._supabase);
 
   RealtimeChannel _channel(String sessionId) {
     return _channels.putIfAbsent(
       sessionId,
-      () => _supabase.channel('game_$sessionId'),
+      () => _supabase.channel(
+        'game_$sessionId',
+        opts: const RealtimeChannelConfig(ack: true),
+      ),
     );
   }
 
@@ -60,8 +64,8 @@ class RealtimeSyncService {
     fetchAndEmit();
 
     // Postgres Changes subscription
-    final channel = _channel(sessionId)
-      ..onPostgresChanges(
+    final channel = _channel(sessionId);
+    channel.onPostgresChanges(
         event: PostgresChangeEvent.update,
         schema: 'pukhuk',
         table: 'game_sessions',
@@ -80,7 +84,22 @@ class RealtimeSyncService {
             }
           }
         },
-      );
+      ).onPresenceSync((payload) {
+        if (!_presenceControllers.containsKey(sessionId)) return;
+        final presenceList = channel.presenceState();
+        final presenceMap = <String, dynamic>{};
+        
+        for (final item in presenceList) {
+          try {
+            final dynamic pPayload = (item as dynamic).state;
+            final playerId = pPayload['player_id'];
+            if (playerId != null) {
+              presenceMap[playerId] = pPayload;
+            }
+          } catch (_) {}
+        }
+        _presenceControllers[sessionId]?.add(presenceMap);
+      });
 
     _ensureSubscribed(sessionId);
 
@@ -88,10 +107,50 @@ class RealtimeSyncService {
       await channel.unsubscribe();
       _channels.remove(sessionId);
       _sessionControllers.remove(sessionId);
+      _presenceControllers.remove(sessionId);
       controller.close();
     };
 
     return controller.stream;
+  }
+
+  Stream<Map<String, dynamic>> watchPresence(String sessionId) {
+    if (_presenceControllers.containsKey(sessionId)) {
+      return _presenceControllers[sessionId]!.stream;
+    }
+    final controller = StreamController<Map<String, dynamic>>.broadcast();
+    _presenceControllers[sessionId] = controller;
+    
+    // Emit initial presence if channel exists
+    if (_channels.containsKey(sessionId)) {
+      final presenceList = _channels[sessionId]!.presenceState();
+      final presenceMap = <String, dynamic>{};
+      
+      for (final item in presenceList) {
+        try {
+          final dynamic pPayload = (item as dynamic).state;
+          final playerId = pPayload['player_id'];
+          if (playerId != null) {
+            presenceMap[playerId] = pPayload;
+          }
+        } catch (_) {}
+      }
+      controller.add(presenceMap);
+    }
+    
+    controller.onCancel = () {
+      _presenceControllers.remove(sessionId);
+      controller.close();
+    };
+    return controller.stream;
+  }
+
+  Future<void> trackPresence(String sessionId, String playerId) async {
+    final ch = _channel(sessionId);
+    await ch.track({
+      'player_id': playerId,
+      'online_at': DateTime.now().toIso8601String(),
+    });
   }
 
   Future<void> submitTurn({
@@ -103,8 +162,8 @@ class RealtimeSyncService {
     final isBotMatch = newState.scores.keys.contains('00000000-0000-0000-0000-000000000000');
 
     if (isBotMatch) {
-      // Bot matches are local and unranked, so we bypass the RPC 
-      // (which requires a puk_huk_matches row) to avoid 400 Bad Requests.
+      // Bot matches are local and unranked without a matches table row,
+      // so we update game_sessions directly with an optimistic turn lock.
       final response = await _supabase
           .schema('pukhuk')
           .from('game_sessions')
@@ -133,19 +192,8 @@ class RealtimeSyncService {
         },
       );
     } catch (e) {
-      print('RPC submit_turn failed: $e, falling back to direct update');
-      
-      final response = await _supabase
-          .schema('pukhuk')
-          .from('game_sessions')
-          .update({'state': newState.toJson()})
-          .eq('id', matchId)
-          .eq('state->>turn_number', expectedTurnNumber.toString())
-          .select();
-          
-      if (response.isEmpty) {
-        throw Exception('Failed to submit turn: State may have changed or session not found.');
-      }
+      print('RPC submit_turn failed: $e');
+      throw Exception('Failed to submit turn: $e');
     }
     
     // Optimistic local update

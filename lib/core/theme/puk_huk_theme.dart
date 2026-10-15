@@ -25,6 +25,27 @@ abstract class PukHukTheme {
   static const Color speedHigh = Color(0xFFFF4444);
   static const Color speedLow = Color(0xFF44FF88);
 
+  // ── Cyberpunk Gradients ────────────────────────────────────────────────────
+  static const LinearGradient metallicGradient = LinearGradient(
+    begin: Alignment.topCenter,
+    end: Alignment.bottomCenter,
+    colors: [
+      Color(0xFF5E6573), // Light metallic
+      Color(0xFF2C313C), // Dark metallic
+      Color(0xFF161A22), // Deep shadow
+    ],
+    stops: [0.0, 0.5, 1.0],
+  );
+
+  static const LinearGradient metallicBorderGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFF7A8496), // Bright edge
+      Color(0xFF161A22), // Dark edge
+    ],
+  );
+
   // ── Tier Colors ────────────────────────────────────────────────────────────
   static const Map<String, Color> tierColors = {
     'bronze': Color(0xFFCD7F32),
