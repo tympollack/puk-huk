@@ -773,43 +773,47 @@ class _PauseButton extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final sessionState = ref.watch(gameSessionProvider(sessionId)).value;
+    final isMyTurn = sessionState?.currentTurnPlayerId == localPlayerId;
     final hasPauses = pausesUsed < 3;
-    final color = isPaused ? Colors.amber : (hasPauses ? Colors.white70 : Colors.white24);
+    final canToggle = (hasPauses || isPaused) && isMyTurn;
+    final color = isPaused ? Colors.amber : (canToggle ? Colors.white70 : Colors.white24);
 
     return InkWell(
-      onTap: () {
-        if (!hasPauses && !isPaused) return;
-        
-        final sessionState = ref.read(gameSessionProvider(sessionId)).value;
-        if (sessionState == null) return;
+      onTap: !canToggle
+          ? null
+          : () {
+              final currentSession = ref.read(gameSessionProvider(sessionId)).value;
+              if (currentSession == null) return;
+              if (currentSession.currentTurnPlayerId != localPlayerId) return;
 
-        final syncService = ref.read(realtimeSyncServiceProvider);
-        
-        if (isPaused) {
-          syncService.submitTurn(
-            matchId: sessionId,
-            playerId: localPlayerId,
-            expectedTurnNumber: sessionState.turnNumber,
-            newState: sessionState.copyWith(
-              status: 'active',
-              turnStartedAt: DateTime.now().toUtc(),
-            ),
-          );
-        } else {
-          final newPauses = Map<String, int>.from(sessionState.pausesUsed);
-          newPauses[localPlayerId] = pausesUsed + 1;
+              final syncService = ref.read(realtimeSyncServiceProvider);
 
-          syncService.submitTurn(
-            matchId: sessionId,
-            playerId: localPlayerId,
-            expectedTurnNumber: sessionState.turnNumber,
-            newState: sessionState.copyWith(
-              status: 'paused',
-              pausesUsed: newPauses,
-            ),
-          );
-        }
-      },
+              if (isPaused) {
+                syncService.submitTurn(
+                  matchId: sessionId,
+                  playerId: localPlayerId,
+                  expectedTurnNumber: currentSession.turnNumber,
+                  newState: currentSession.copyWith(
+                    status: 'active',
+                    turnStartedAt: DateTime.now().toUtc(),
+                  ),
+                );
+              } else {
+                final newPauses = Map<String, int>.from(currentSession.pausesUsed);
+                newPauses[localPlayerId] = pausesUsed + 1;
+
+                syncService.submitTurn(
+                  matchId: sessionId,
+                  playerId: localPlayerId,
+                  expectedTurnNumber: currentSession.turnNumber,
+                  newState: currentSession.copyWith(
+                    status: 'paused',
+                    pausesUsed: newPauses,
+                  ),
+                );
+              }
+            },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(

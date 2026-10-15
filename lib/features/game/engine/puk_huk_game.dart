@@ -35,11 +35,13 @@ class PukHukGame extends Forge2DGame with PanDetector {
   final void Function(PuckComponent puck)? onPuckSettled;
   final void Function(double speed, double distance)? onThrowComplete;
   final void Function(double velocity, double angle, double spin, bool isAiming)? onTelemetryUpdate;
+  final VoidCallback? onPuckLaunched;
 
   PukHukGame({
     this.onPuckSettled,
     this.onThrowComplete,
     this.onTelemetryUpdate,
+    this.onPuckLaunched,
   }) : super(gravity: Vector2.zero()); // top-down view — no gravity
 
   PuckComponent? _activePuck;
@@ -149,20 +151,44 @@ class PukHukGame extends Forge2DGame with PanDetector {
     }
   }
 
+  /// Cancels any active aiming/drag state and removes the active puck from the game.
+  void cancelActivePuck() {
+    if (_aimIndicator != null) {
+      _aimIndicator!.removeFromParent();
+      _aimIndicator = null;
+    }
+    if (_activePuck != null) {
+      if (_activePuck!.isMounted) {
+        _activePuck!.removeFromParent();
+      }
+      _activePuck = null;
+    }
+    _dragStart = null;
+    _aimStart = null;
+    _isAiming = false;
+    if (onTelemetryUpdate != null) {
+      onTelemetryUpdate!(0.0, 0.0, 0.0, false);
+    }
+  }
+
   @override
   void onPanEnd(DragEndInfo info) {
     if (isPaused) return;
     if (_activePuck == null || _dragStart == null) return;
+
+    bool launched = false;
 
     if (_isAiming && _aimStart != null) {
       final puck = _activePuck!;
       final impulse = puck.consumeAimImpulse();
 
       if (impulse.length > 0.005) {
+        launched = true;
         puck.body.applyLinearImpulse(impulse);
         // Apply angular impulse for authentic spin physics corresponding to lateral release
         final spinImpulse = (impulse.x * 0.004);
         puck.body.applyAngularImpulse(spinImpulse);
+        onPuckLaunched?.call();
         puck.startTracking(onSettled: () {
           onPuckSettled?.call(puck);
           onThrowComplete?.call(puck.peakSpeed, puck.totalDistance);
@@ -178,7 +204,15 @@ class PukHukGame extends Forge2DGame with PanDetector {
     _dragStart = null;
     _aimStart = null;
     _isAiming = false;
-    _activePuck = null;
+
+    if (launched) {
+      _activePuck = null;
+    } else {
+      // Subthreshold release or positioning only: retain _activePuck so player can aim again
+      if (_activePuck != null) {
+        _initialPuckX = _activePuck!.body.position.x;
+      }
+    }
 
     if (onTelemetryUpdate != null) {
       onTelemetryUpdate!(0.0, 0.0, 0.0, false);

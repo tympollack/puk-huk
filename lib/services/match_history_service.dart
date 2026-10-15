@@ -32,6 +32,23 @@ Future<List<MatchHistoryItem>> matchHistory(Ref ref) async {
   if (user == null) return [];
 
   final supabase = Supabase.instance.client;
+
+  // Watch session updates so retained lobby cards reflect current scores and turns
+  final channel = supabase
+      .channel('match_history_realtime_${user.uid}')
+      .onPostgresChanges(
+        event: PostgresChangeEvent.all,
+        schema: 'pukhuk',
+        table: 'game_sessions',
+        callback: (_) {
+          ref.invalidateSelf();
+        },
+      )
+      .subscribe();
+
+  ref.onDispose(() {
+    supabase.removeChannel(channel);
+  });
   
   // Call the RPC to get sessions
   final List<dynamic> response = await supabase.rpc('get_user_match_history', params: {
@@ -55,7 +72,13 @@ Future<List<MatchHistoryItem>> matchHistory(Ref ref) async {
     );
 
     PlayerModel? opponent;
-    if (opponentId.isNotEmpty) {
+    if (opponentId == '00000000-0000-0000-0000-000000000000') {
+      opponent = PlayerModel(
+        uid: opponentId,
+        displayName: 'Shuffle Bot',
+        elo: 1200,
+      );
+    } else if (opponentId.isNotEmpty) {
       opponent = await playerRepo.getPlayer(opponentId);
     }
     
@@ -70,7 +93,7 @@ Future<List<MatchHistoryItem>> matchHistory(Ref ref) async {
       sessionId: sessionId,
       state: state,
       createdAt: createdAt,
-      opponent: opponent!,
+      opponent: opponent,
       isMyTurn: state.currentTurnPlayerId == user.uid,
       isCompleted: state.status == 'completed' || state.status == 'forfeited',
     ));

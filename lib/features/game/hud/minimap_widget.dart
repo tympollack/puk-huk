@@ -4,11 +4,13 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/providers/auth_provider.dart';
 import '../../../data/models/game_session_model.dart';
 import '../providers/game_providers.dart';
 import '../engine/puk_huk_game.dart';
 import '../engine/puck_component.dart';
 import '../engine/board_boundary_component.dart';
+import '../services/bot_engine.dart';
 import '../../../core/theme/puk_huk_theme.dart';
 
 class MinimapWidget extends ConsumerStatefulWidget {
@@ -170,8 +172,16 @@ class _MinimapWidgetState extends ConsumerState<MinimapWidget> with SingleTicker
                     pucks = sessionState?.boardState ?? [];
                   }
                   
+                  final player = ref.watch(currentPlayerProvider).value;
                   return CustomPaint(
-                    painter: _MinimapPainter(pucks, _currentScale, _currentViewY, _boardTexture, widget.themeId),
+                    painter: _MinimapPainter(
+                      pucks,
+                      _currentScale,
+                      _currentViewY,
+                      _boardTexture,
+                      widget.themeId,
+                      currentUserId: player?.uid,
+                    ),
                   );
                 },
               ),
@@ -189,8 +199,16 @@ class _MinimapPainter extends CustomPainter {
   final double viewY;
   final ui.Image? texture;
   final String themeId;
+  final String? currentUserId;
 
-  _MinimapPainter(this.pucks, this.scale, this.viewY, this.texture, this.themeId);
+  _MinimapPainter(
+    this.pucks,
+    this.scale,
+    this.viewY,
+    this.texture,
+    this.themeId, {
+    this.currentUserId,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -326,9 +344,10 @@ class _MinimapPainter extends CustomPainter {
       final screenX = puck.x * scale;
       final screenY = py * scale;
 
-      // We'll use a simple color logic: if it has the bot ID (from anywhere) we use secondary, else primary.
-      // Since minimap doesn't know localPlayerId directly without Consumer, we could just check if it's 'bot_1'.
-      final color = puck.ownerId == 'bot_1' ? PukHukTheme.secondary : PukHukTheme.primary;
+      final isOpponent = currentUserId != null
+          ? puck.ownerId != currentUserId
+          : (puck.ownerId == 'bot_1' || puck.ownerId == pukhukBotId);
+      final color = isOpponent ? PukHukTheme.secondary : PukHukTheme.primary;
       
       canvas.drawCircle(
         Offset(screenX, screenY),

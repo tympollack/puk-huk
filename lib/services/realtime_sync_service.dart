@@ -159,6 +159,28 @@ class RealtimeSyncService {
     required int expectedTurnNumber,
     required GameSessionState newState,
   }) async {
+    final isBotMatch = newState.scores.keys.contains('00000000-0000-0000-0000-000000000000');
+
+    if (isBotMatch) {
+      // Bot matches are local and unranked without a matches table row,
+      // so we update game_sessions directly with an optimistic turn lock.
+      final response = await _supabase
+          .schema('pukhuk')
+          .from('game_sessions')
+          .update({'state': newState.toJson()})
+          .eq('id', matchId)
+          .eq('state->>turn_number', expectedTurnNumber.toString())
+          .select();
+
+      if (response.isEmpty) {
+        throw Exception('Failed to submit turn: State may have changed or session not found.');
+      }
+      
+      // Optimistic local update
+      _sessionControllers[matchId]?.add(newState);
+      return;
+    }
+
     try {
       await _supabase.rpc(
         'submit_turn',

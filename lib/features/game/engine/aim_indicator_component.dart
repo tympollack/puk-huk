@@ -25,7 +25,6 @@ class AimIndicatorComponent extends PositionComponent with HasGameRef<PukHukGame
 
     // The line starts at the puck and extends up to 0.8 meters based on magnitude
     final start = puck.body.position;
-    final end = start + (direction * (magnitude * 0.8));
 
     // Color goes from green (weak) to yellow (medium) to red (max power)
     Color lineColor;

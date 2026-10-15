@@ -2,12 +2,6 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flame/components.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
-
-import '../../../core/providers/auth_provider.dart';
-import '../../../services/realtime_sync_service.dart';
-import '../providers/game_providers.dart';
 import '../../../data/models/game_session_model.dart';
 import '../../../data/models/player_model.dart';
 

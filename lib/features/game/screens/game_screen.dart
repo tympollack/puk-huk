@@ -11,6 +11,8 @@ import '../../../core/router/app_router.dart';
 import '../../../core/theme/puk_huk_theme.dart';
 import '../../../data/models/game_session_model.dart';
 import '../../../services/realtime_sync_service.dart';
+import '../../../services/matchmaking_service.dart';
+import '../../../services/player_repository.dart';
 import '../engine/board_boundary_component.dart';
 import '../engine/aim_indicator_component.dart';
 import '../engine/puck_component.dart';
@@ -34,15 +36,21 @@ class GameScreen extends ConsumerStatefulWidget {
 class _GameScreenState extends ConsumerState<GameScreen> {
   late final PukHukGame _game;
   BotEngine? _botEngine;
+  PuckComponent? _botPuck;
   ProviderSubscription? _sessionSub;
   StreamSubscription? _presenceSub;
   Timer? _turnTimer;
+  bool _gameOverDialogShown = false;
 
   @override
   void initState() {
     super.initState();
     _game = PukHukGame(
       onPuckSettled: _handlePuckSettled,
+      onPuckLaunched: () {
+        // Suspend the turn deadline while the puck is in motion
+        _turnTimer?.cancel();
+      },
       onTelemetryUpdate: (velocity, angle, spin, isAiming) {
         if (!mounted) return;
         ref.read(telemetryProvider.notifier).updateTelemetry(
@@ -72,8 +80,8 @@ class _GameScreenState extends ConsumerState<GameScreen> {
 
         final oppPresence = presenceState[opponentId];
         if (oppPresence == null || (oppPresence is List && oppPresence.isEmpty)) {
-          // Opponent went offline! Auto forfeit if not already paused
-          if (sessionState.status == 'active') {
+          // Opponent went offline! Auto forfeit only if active and it is currently the opponent's turn
+          if (sessionState.status == 'active' && sessionState.currentTurnPlayerId == opponentId) {
              _autoForfeitTurn(sessionState, opponentId, disconnect: true);
           }
         }
@@ -90,9 +98,18 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         final player = ref.read(currentPlayerProvider).value;
         if (player == null) return;
 
-        // 0. Handle active/paused states
+        // 0. Handle active/paused/completed states
         _game.isPaused = (state.status == 'paused');
         
+        if (state.status != 'active') {
+          _turnTimer?.cancel();
+        }
+
+        if (state.status == 'completed') {
+          _showGameOverDialog(state);
+          return;
+        }
+
         if (state.status == 'paused') {
           // Check if we need to show a dialog
           final inactivePlayers = state.missedTurns.entries
@@ -163,6 +180,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
                 linearDampingValue: PukHukGame.linearDamping,
                 position: startPos,
               );
+              _botPuck = botPuck;
               await _game.world.add(botPuck);
               
               // 1. Show aim indicator
@@ -217,42 +235,89 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     _sessionSub?.close();
     _presenceSub?.cancel();
     _turnTimer?.cancel();
+    _botPuck = null;
     super.dispose();
   }
 
   Future<void> _autoForfeitTurn(GameSessionState currentState, String playerId, {bool disconnect = false}) async {
     if (!mounted) return;
     
+    // Validate live session state and turn ownership
+    final latestState = ref.read(gameSessionProvider(widget.sessionId)).value;
+    if (latestState == null ||
+        latestState.status != 'active' ||
+        latestState.currentTurnPlayerId != playerId ||
+        latestState.turnNumber != currentState.turnNumber) {
+      return;
+    }
+
+    // Cancel active puck and reset aiming state so future spawns work
+    _game.cancelActivePuck();
+    if (_botPuck != null) {
+      if (_botPuck!.isMounted) _botPuck!.removeFromParent();
+      _botPuck = null;
+    }
+
     // Increment missed turns for this player
-    final newMissedTurns = Map<String, int>.from(currentState.missedTurns);
+    final newMissedTurns = Map<String, int>.from(latestState.missedTurns);
     newMissedTurns[playerId] = disconnect ? 2 : ((newMissedTurns[playerId] ?? 0) + 1);
     
     // Determine if game should pause (2 misses)
     final shouldPause = (newMissedTurns[playerId] ?? 0) >= 2;
+    final opponentId = latestState.scores.keys.firstWhere((id) => id != playerId);
     
-    final opponentId = currentState.scores.keys.firstWhere((id) => id != playerId);
-    final nextTurnPlayerId = shouldPause ? currentState.currentTurnPlayerId : opponentId;
-    
-    final newState = currentState.copyWith(
-      turnNumber: currentState.turnNumber + 1,
+    var nextTurnPlayerId = shouldPause ? latestState.currentTurnPlayerId : opponentId;
+    var nextTurnNumber = latestState.turnNumber + 1;
+    var nextBoardState = latestState.boardState;
+    var newScores = Map<String, int>.from(latestState.scores);
+    var status = shouldPause ? 'paused' : 'active';
+
+    // If turn 8 expires, the round is over! Calculate round scoring just like settled puck
+    if (latestState.turnNumber == 8) {
+      final roundResult = _calculateRoundEnd(
+        pucks: latestState.boardState,
+        currentScores: latestState.scores,
+        lastTurnPlayerId: playerId,
+        opponentId: opponentId,
+      );
+      newScores = roundResult.scores;
+      nextBoardState = roundResult.boardState;
+      nextTurnNumber = roundResult.nextTurnNumber;
+      nextTurnPlayerId = roundResult.nextTurnPlayerId;
+      if (roundResult.isCompleted) {
+        status = 'completed';
+      } else {
+        final currentPucks = _game.world.children.whereType<PuckComponent>().toList();
+        for (final p in currentPucks) {
+          p.removeFromParent();
+        }
+      }
+    }
+
+    final newState = latestState.copyWith(
+      turnNumber: nextTurnNumber,
       currentTurnPlayerId: nextTurnPlayerId,
       turnStartedAt: DateTime.now().toUtc(),
       missedTurns: newMissedTurns,
-      status: shouldPause ? 'paused' : 'active',
-      // We don't change board state since no puck was thrown
+      status: status,
+      scores: newScores,
+      boardState: nextBoardState,
     );
 
-    // Remove active puck from the board if it was spawned
-    if (_game.activePuck != null && _game.activePuck!.ownerId == playerId) {
-      _game.activePuck!.removeFromParent();
+    try {
+      await ref.read(realtimeSyncServiceProvider).submitTurn(
+        matchId: widget.sessionId,
+        playerId: playerId,
+        expectedTurnNumber: latestState.turnNumber,
+        newState: newState,
+      );
+
+      if (status == 'completed') {
+        _resolveCompletedMatch(newState);
+      }
+    } catch (e) {
+      print('Auto-forfeit failed: $e');
     }
-
-    await ref.read(realtimeSyncServiceProvider).submitTurn(
-      matchId: widget.sessionId,
-      playerId: playerId,
-      expectedTurnNumber: currentState.turnNumber,
-      newState: newState,
-    );
   }
 
   void _showInactivityDialog(GameSessionState state) {
@@ -282,9 +347,9 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     final currentPucks = _game.world.children.whereType<PuckComponent>().toList();
     
     // Remove pucks that no longer exist in the authoritative state
-    // (e.g. they were knocked off the board)
+    // Protect both local active puck and bot puck currently in motion/aiming
     for (final puck in currentPucks) {
-      if (puck == _game.activePuck) continue; // Don't touch the active puck we are throwing
+      if (puck == _game.activePuck || puck == _botPuck) continue;
       final existsInState = boardState.any((p) => p.puckId == puck.puckId);
       if (!existsInState) {
         puck.removeFromParent();
@@ -296,7 +361,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       final existingPuck = currentPucks.where((p) => p.puckId == pState.puckId).firstOrNull;
       
       if (existingPuck != null) {
-        if (existingPuck != _game.activePuck) {
+        if (existingPuck != _game.activePuck && existingPuck != _botPuck) {
           // Update position for opponent pucks that might have settled
           existingPuck.body.setTransform(Vector2(pState.x, pState.y), 0);
         }
@@ -318,7 +383,172 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     }
   }
 
+  ({
+    Map<String, int> scores,
+    List<PuckStateModel> boardState,
+    int nextTurnNumber,
+    String nextTurnPlayerId,
+    bool isCompleted,
+  }) _calculateRoundEnd({
+    required List<PuckStateModel> pucks,
+    required Map<String, int> currentScores,
+    required String lastTurnPlayerId,
+    required String opponentId,
+  }) {
+    final newScores = Map<String, int>.from(currentScores);
+    final validPucks = pucks
+        .where((p) => p.status != 'knocked_off')
+        .toList()
+      ..sort((a, b) => a.y.compareTo(b.y));
+
+    if (validPucks.isNotEmpty) {
+      final winningPuck = validPucks.first;
+      final roundWinnerId = winningPuck.ownerId;
+
+      final bestOpponentPuck = validPucks.where((p) => p.ownerId != roundWinnerId).firstOrNull;
+      final cutoffY = bestOpponentPuck?.y ?? PukHukGame.boardLength;
+
+      int roundScore = 0;
+      for (final p in validPucks.where((p) => p.ownerId == roundWinnerId)) {
+        if (p.y < cutoffY) {
+          final zone = BoardBoundaryComponent.zoneForPosition(p.y, PukHukGame.boardLength);
+          roundScore += ScoringZones.pointsForZone(zone, isHanger: zone == -1);
+        }
+      }
+
+      newScores[roundWinnerId] = (newScores[roundWinnerId] ?? 0) + roundScore;
+    }
+
+    // Shuffleboard regulation victory target is 15 points
+    const winningScore = 15;
+    final p1Score = newScores[lastTurnPlayerId] ?? 0;
+    final p2Score = newScores[opponentId] ?? 0;
+    final isCompleted = p1Score >= winningScore || p2Score >= winningScore;
+
+    if (isCompleted) {
+      final winnerId = p1Score >= p2Score ? lastTurnPlayerId : opponentId;
+      return (
+        scores: newScores,
+        boardState: pucks,
+        nextTurnNumber: 8,
+        nextTurnPlayerId: winnerId,
+        isCompleted: true,
+      );
+    }
+
+    return (
+      scores: newScores,
+      boardState: <PuckStateModel>[],
+      nextTurnNumber: 1,
+      nextTurnPlayerId: lastTurnPlayerId,
+      isCompleted: false,
+    );
+  }
+
+  Future<void> _resolveCompletedMatch(GameSessionState finalState) async {
+    final player = ref.read(currentPlayerProvider).value;
+    if (player == null) return;
+    final opponentId = finalState.scores.keys.firstWhere((id) => id != player.uid, orElse: () => '');
+    if (opponentId.isEmpty) return;
+
+    final myScore = finalState.scores[player.uid] ?? 0;
+    final oppScore = finalState.scores[opponentId] ?? 0;
+    final winnerId = myScore >= oppScore ? player.uid : opponentId;
+    final loserId = winnerId == player.uid ? opponentId : player.uid;
+
+    final matchmaking = ref.read(matchmakingServiceProvider);
+    try {
+      if (opponentId == pukhukBotId) {
+        await matchmaking.resolveUnrankedMatch(
+          matchId: widget.sessionId,
+          winnerId: winnerId,
+          loserId: loserId,
+          winnerElo: winnerId == player.uid ? player.elo : 1200,
+          loserElo: loserId == player.uid ? player.elo : 1200,
+          winnerGamesPlayed: winnerId == player.uid ? player.totalGames : 0,
+          loserGamesPlayed: loserId == player.uid ? player.totalGames : 0,
+          winnerScore: finalState.scores[winnerId] ?? 0,
+          loserScore: finalState.scores[loserId] ?? 0,
+        );
+      } else {
+        final oppPlayer = await ref.read(playerRepositoryProvider).getPlayer(opponentId);
+        final oppElo = oppPlayer?.elo ?? 1200;
+        final oppGames = oppPlayer?.totalGames ?? 0;
+
+        await matchmaking.resolveMatch(
+          matchId: widget.sessionId,
+          winnerId: winnerId,
+          loserId: loserId,
+          winnerElo: winnerId == player.uid ? player.elo : oppElo,
+          loserElo: loserId == player.uid ? player.elo : oppElo,
+          winnerGamesPlayed: winnerId == player.uid ? player.totalGames : oppGames,
+          loserGamesPlayed: loserId == player.uid ? player.totalGames : oppGames,
+          winnerScore: finalState.scores[winnerId] ?? 0,
+          loserScore: finalState.scores[loserId] ?? 0,
+        );
+      }
+    } catch (e) {
+      print('Could not resolve match record: $e');
+    }
+  }
+
+  void _showGameOverDialog(GameSessionState state) {
+    if (!mounted || _gameOverDialogShown) return;
+    _gameOverDialogShown = true;
+
+    final player = ref.read(currentPlayerProvider).value;
+    final myScore = (player != null ? state.scores[player.uid] : null) ?? 0;
+    final opponentId = state.scores.keys.firstWhere((id) => id != player?.uid, orElse: () => '');
+    final oppScore = state.scores[opponentId] ?? 0;
+    final isWinner = myScore >= oppScore;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF161A22),
+          title: Text(
+            isWinner ? 'VICTORY!' : 'DEFEAT',
+            style: TextStyle(
+              color: isWinner ? PukHukTheme.primary : PukHukTheme.danger,
+              fontWeight: FontWeight.bold,
+              fontSize: 24,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Final Score: $myScore - $oppScore',
+                style: const TextStyle(color: Colors.white, fontSize: 18),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                isWinner ? 'Congratulations, you won the match!' : 'Good game! Better luck next time.',
+                style: const TextStyle(color: Colors.white70),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                context.go(Routes.lobby);
+              },
+              child: const Text('RETURN TO LOBBY', style: TextStyle(color: PukHukTheme.primary, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   void _handlePuckSettled(PuckComponent puck) async {
+    if (puck == _botPuck) {
+      _botPuck = null;
+    }
+
     final player = ref.read(currentPlayerProvider).value;
     final currentState = ref.read(gameSessionProvider(widget.sessionId)).value;
     
@@ -347,46 +577,34 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     }
 
     final opponentId = currentState.scores.keys.firstWhere((id) => id != player.uid);
-    // Toggle the turn! If it was the local player's turn, it's now the opponent's. If it was the opponent's (bot), it's now the local player's.
     var nextTurnPlayerId = currentState.currentTurnPlayerId == player.uid ? opponentId : player.uid;
     var nextTurnNumber = currentState.turnNumber + 1;
     var nextBoardState = newBoardState;
     var newScores = Map<String, int>.from(currentState.scores);
     var newMissedTurns = Map<String, int>.from(currentState.missedTurns);
     newMissedTurns[currentState.currentTurnPlayerId] = 0; // Reset missed turns on a successful throw
+    var status = currentState.status;
 
     // If this was the 8th throw, the round is over! Calculate cancellation scoring.
     if (currentState.turnNumber == 8) {
-      // 1. Filter out knocked off pucks and sort by Y position (lowest Y is furthest)
-      final validPucks = currentPucks
-          .where((p) => p.status != 'knocked_off')
-          .toList()
-        ..sort((a, b) => a.body.position.y.compareTo(b.body.position.y));
-
-      if (validPucks.isNotEmpty) {
-        final winningPuck = validPucks.first;
-        final roundWinnerId = winningPuck.ownerId;
-        
-        // Find the opponent's best puck (furthest down the board)
-        final bestOpponentPuck = validPucks.where((p) => p.ownerId != roundWinnerId).firstOrNull;
-        final cutoffY = bestOpponentPuck?.body.position.y ?? PukHukGame.boardLength;
-
-        // Calculate score for the winner
-        int roundScore = 0;
-        for (final p in validPucks.where((p) => p.ownerId == roundWinnerId)) {
-          if (p.body.position.y < cutoffY) {
-            final zone = BoardBoundaryComponent.zoneForPosition(p.body.position.y, PukHukGame.boardLength);
-            roundScore += ScoringZones.pointsForZone(zone, isHanger: zone == -1);
-          }
+      final roundResult = _calculateRoundEnd(
+        pucks: newBoardState,
+        currentScores: newScores,
+        lastTurnPlayerId: currentState.currentTurnPlayerId,
+        opponentId: opponentId,
+      );
+      newScores = roundResult.scores;
+      nextBoardState = roundResult.boardState;
+      nextTurnNumber = roundResult.nextTurnNumber;
+      nextTurnPlayerId = roundResult.nextTurnPlayerId;
+      if (roundResult.isCompleted) {
+        status = 'completed';
+      } else {
+        // Clear board visually for new round
+        for (final p in currentPucks) {
+          p.removeFromParent();
         }
-        
-        newScores[roundWinnerId] = (newScores[roundWinnerId] ?? 0) + roundScore;
       }
-
-      // Reset for next round
-      nextTurnNumber = 1;
-      nextBoardState = [];
-      nextTurnPlayerId = player.uid; // Player who threw last (hammer) goes first next round
     }
 
     final newState = currentState.copyWith(
@@ -396,6 +614,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       scores: newScores,
       boardState: nextBoardState,
       missedTurns: newMissedTurns,
+      status: status,
       lastAction: ActionModel(
         playerId: currentState.currentTurnPlayerId,
         vectorX: puck.body.linearVelocity.x,
@@ -413,6 +632,10 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         expectedTurnNumber: currentState.turnNumber,
         newState: newState,
       );
+
+      if (status == 'completed') {
+        _resolveCompletedMatch(newState);
+      }
     } catch (e) {
       print('Failed to submit turn: $e');
     }
@@ -494,7 +717,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
               left: 10,
               child: InkWell(
                 onTap: () {
-                  context.go('/lobby'); // Back to lobby without forfeit
+                  _confirmExit(context);
                 },
                 borderRadius: BorderRadius.circular(20),
                 child: Container(
@@ -608,21 +831,31 @@ class _InactivityDialogContentState extends ConsumerState<_InactivityDialogConte
           child: Text('WAIT', style: TextStyle(color: Colors.white54)),
         ),
         TextButton(
-          onPressed: _secondsLeft > 0 ? null : () {
+          onPressed: _secondsLeft > 0 ? null : () async {
             // Claim win
             Navigator.pop(context);
-            final player = ref.read(currentPlayerProvider).value!;
-            final newScores = Map<String, int>.from(widget.state.scores);
+            final latestState = ref.read(gameSessionProvider(widget.sessionId)).value ?? widget.state;
+            final player = ref.read(currentPlayerProvider).value;
+            if (player == null) return;
+
+            final opponentId = latestState.scores.keys.firstWhere((id) => id != player.uid, orElse: () => '');
+            // Guard: Only allow claiming win if opponent has at least 2 missed turns and game is paused
+            final opponentMissed = latestState.missedTurns[opponentId] ?? 0;
+            if (opponentMissed < 2 || latestState.status != 'paused') {
+              return;
+            }
+
+            final newScores = Map<String, int>.from(latestState.scores);
             newScores[player.uid] = 15; // Auto win
             
-            final newState = widget.state.copyWith(
+            final newState = latestState.copyWith(
               status: 'completed',
               scores: newScores,
             );
-            ref.read(realtimeSyncServiceProvider).submitTurn(
+            await ref.read(realtimeSyncServiceProvider).submitTurn(
               matchId: widget.sessionId,
               playerId: player.uid,
-              expectedTurnNumber: widget.state.turnNumber,
+              expectedTurnNumber: latestState.turnNumber,
               newState: newState,
             );
           },

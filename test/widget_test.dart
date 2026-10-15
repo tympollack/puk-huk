@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:puk_huk/features/game/engine/board_boundary_component.dart';
+import 'package:puk_huk/features/game/engine/puk_huk_game.dart';
 import 'package:puk_huk/features/game/providers/game_providers.dart';
 
 void main() {
@@ -47,6 +48,21 @@ void main() {
       expect(state.angle, equals(-3.5));
       expect(state.spin, equals(1.2));
       expect(state.isAiming, isTrue);
+    });
+
+    test('PukHukGame cancelActivePuck resets active puck and aim state', () {
+      bool launched = false;
+      final game = PukHukGame(
+        onPuckLaunched: () {
+          launched = true;
+        },
+      );
+
+      expect(game.activePuck, isNull);
+      expect(launched, isFalse);
+
+      game.cancelActivePuck();
+      expect(game.activePuck, isNull);
     });
   });
 }
