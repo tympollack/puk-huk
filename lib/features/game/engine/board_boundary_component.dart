@@ -32,7 +32,11 @@ class BoardBoundaryComponent extends BodyComponent {
 
   @override
   Body createBody() {
-    final bodyDef = BodyDef(position: Vector2.zero(), type: BodyType.static);
+    final bodyDef = BodyDef(
+      position: Vector2.zero(),
+      type: BodyType.static,
+      userData: this,
+    );
     final body = world.createBody(bodyDef);
 
     // Gutters are 0.1m wide on each side and far end

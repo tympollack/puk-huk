@@ -4,6 +4,7 @@ import 'package:flame_forge2d/flame_forge2d.dart';
 import 'package:flutter/material.dart';
 
 import 'puk_huk_game.dart';
+import 'board_boundary_component.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PuckComponent — a single shuffleboard puck with full physics simulation.
@@ -15,8 +16,9 @@ import 'puk_huk_game.dart';
 //   • Spin physics visualization → dynamic angular vortex arcs scaling with
 //     Box2D body.angularVelocity
 //   • Settling → subtle glow fade as puck decelerates below rest threshold
+//   • Trailing dust & collision sparks via PukHukParticleEmitter
 // ─────────────────────────────────────────────────────────────────────────────
-class PuckComponent extends BodyComponent {
+class PuckComponent extends BodyComponent with ContactCallbacks {
   PukHukGame? get _game => game is PukHukGame ? (game as PukHukGame) : null;
   final String puckId;
   final String ownerId;
@@ -47,6 +49,7 @@ class PuckComponent extends BodyComponent {
   Vector2 _lastPosition = Vector2.zero();
   bool _isTracking = false;
   VoidCallback? _onSettledCallback;
+  double _dustTimer = 0.0;
 
   // ── Aim preview (drag-to-launch) ────────────────────────────────────────
   Vector2 _aimImpulse = Vector2.zero();
@@ -165,12 +168,38 @@ class PuckComponent extends BodyComponent {
       body.linearDamping = linearDampingValue;
     }
 
+    // Emit trailing sand/wax friction dust while sliding
+    if (speed > 0.15 && status != 'knocked_off') {
+      _dustTimer += dt;
+      if (_dustTimer >= 0.04) {
+        _dustTimer = 0.0;
+        _game?.particleEmitter?.emitDust(body.position, velocity);
+      }
+    }
+
     // Detect rest state → throw complete
     if (speed < _restThreshold && peakSpeed > 0.05) {
       _isTracking = false;
       _onSettledCallback?.call();
       _onSettledCallback = null;
       _game?.onTelemetryUpdate?.call(0.0, 0.0, 0.0, false);
+    }
+  }
+
+  @override
+  void beginContact(Object other, Contact contact) {
+    super.beginContact(other, contact);
+    if (other is BoardBoundaryComponent) {
+      final speed = body.linearVelocity.length;
+      if (speed > 0.15) {
+        final worldManifold = WorldManifold();
+        contact.getWorldManifold(worldManifold);
+        final normal = worldManifold.normal;
+        final contactPoint = worldManifold.points.isNotEmpty && worldManifold.points[0].x != 0
+            ? worldManifold.points[0]
+            : body.position;
+        _game?.particleEmitter?.emitSparks(contactPoint, normal, impactSpeed: speed);
+      }
     }
   }
 
