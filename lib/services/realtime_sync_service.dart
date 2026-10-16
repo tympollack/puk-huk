@@ -103,12 +103,16 @@ class RealtimeSyncService {
 
     _ensureSubscribed(sessionId);
 
-    controller.onCancel = () {
+    controller.onCancel = () async {
       _sessionControllers.remove(sessionId);
       _presenceControllers.remove(sessionId);
-      _channels.remove(sessionId);
-      channel.unsubscribe();
-      controller.close();
+      if (_channels[sessionId] == channel) {
+        _channels.remove(sessionId);
+      }
+      await channel.unsubscribe();
+      if (!controller.isClosed) {
+        controller.close();
+      }
     };
 
     return controller.stream;

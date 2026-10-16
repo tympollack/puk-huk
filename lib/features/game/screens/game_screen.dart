@@ -460,6 +460,7 @@ class _GameScreenState extends ConsumerState<GameScreen> {
   }
 
   Future<void> _resolveCompletedMatch(GameSessionState finalState) async {
+    final container = ProviderScope.containerOf(context, listen: false);
     final player = ref.read(currentPlayerProvider).value;
     if (player == null) return;
     final opponentId = finalState.scores.keys.firstWhere((id) => id != player.uid, orElse: () => '');
@@ -484,8 +485,6 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           winnerScore: finalState.scores[winnerId] ?? 0,
           loserScore: finalState.scores[loserId] ?? 0,
         );
-        ref.invalidate(currentPlayerProvider);
-        ref.invalidate(globalLeaderboardProvider);
       } else {
         final oppPlayer = await ref.read(playerRepositoryProvider).getPlayer(opponentId);
         final oppElo = oppPlayer?.elo ?? 1200;
@@ -516,12 +515,14 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           winnerScore: finalState.scores[winnerId] ?? 0,
           loserScore: finalState.scores[loserId] ?? 0,
         );
-
-        ref.invalidate(currentPlayerProvider);
-        ref.invalidate(globalLeaderboardProvider);
       }
     } catch (e) {
       print('Could not resolve match record: $e');
+    } finally {
+      try {
+        container.invalidate(currentPlayerProvider);
+        container.invalidate(globalLeaderboardProvider);
+      } catch (_) {}
     }
   }
 

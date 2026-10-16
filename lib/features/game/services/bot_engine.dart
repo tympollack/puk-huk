@@ -18,8 +18,18 @@ class BotEngine {
     required PlayerModel localPlayer,
   }) async {
 
-    // Seed RNG deterministically per turn so concurrent clients simulate identical trajectories
-    final rng = Random(state.turnNumber.hashCode ^ localPlayer.uid.hashCode);
+    // Seed RNG deterministically per turn so concurrent clients simulate identical trajectories,
+    // while incorporating round scores, board state, and action history to vary across rounds.
+    final scoreSeed = state.scores.values.fold(0, (acc, s) => acc * 31 + s);
+    final boardSeed = state.boardState.fold(0, (acc, p) => acc ^ p.puckId.hashCode ^ p.x.hashCode);
+    final actionSeed = state.lastAction?.timestamp.millisecondsSinceEpoch ?? 0;
+    final rng = Random(
+      state.turnNumber.hashCode ^
+      scoreSeed.hashCode ^
+      boardSeed.hashCode ^
+      actionSeed.hashCode ^
+      localPlayer.uid.hashCode,
+    );
 
     // Simulate thinking delay (1.5s - 3s)
     final delayMs = 1500 + rng.nextInt(1500);
