@@ -18,8 +18,21 @@ class BotEngine {
     required PlayerModel localPlayer,
   }) async {
 
+    // Seed RNG deterministically per turn so concurrent clients simulate identical trajectories,
+    // while incorporating round scores, board state, and action history to vary across rounds.
+    final scoreSeed = state.scores.values.fold(0, (acc, s) => acc * 31 + s);
+    final boardSeed = state.boardState.fold(0, (acc, p) => acc ^ p.puckId.hashCode ^ p.x.hashCode);
+    final actionSeed = state.lastAction?.timestamp.millisecondsSinceEpoch ?? 0;
+    final rng = Random(
+      state.turnNumber.hashCode ^
+      scoreSeed.hashCode ^
+      boardSeed.hashCode ^
+      actionSeed.hashCode ^
+      localPlayer.uid.hashCode,
+    );
+
     // Simulate thinking delay (1.5s - 3s)
-    final delayMs = 1500 + _rng.nextInt(1500);
+    final delayMs = 1500 + rng.nextInt(1500);
     await Future.delayed(Duration(milliseconds: delayMs));
 
     // Simple AI: aim for the 3-point zone (approx 0.25m from far edge)
@@ -40,14 +53,14 @@ class BotEngine {
     double maxNoiseX = 0.4 * skillInverse; // up to 40cm off
     double maxNoiseY = 0.1 * skillInverse; // up to 10cm off
     
-    dx += (maxNoiseX * _rng.nextDouble()) - (maxNoiseX / 2);
-    dy += (maxNoiseY * _rng.nextDouble()) - (maxNoiseY / 2);
+    dx += (maxNoiseX * rng.nextDouble()) - (maxNoiseX / 2);
+    dy += (maxNoiseY * rng.nextDouble()) - (maxNoiseY / 2);
 
-    // Baseline force required to reach 3.4m (heuristic approximation)
-    // Tweak this baseForce to make the bot shoot harder or softer.
-    double baseForce = 2.8;
-    double forceNoise = 0.5 * skillInverse;
-    double appliedForce = baseForce + ((_rng.nextDouble() * forceNoise) - (forceNoise / 2));
+    // Baseline force calibrated for Forge2D linear damping (0.45 + low-speed damping)
+    // to cleanly travel ~3.2m across the board into the scoring zones (maxLaunchImpulse is 0.06).
+    double baseForce = 4.9;
+    double forceNoise = 0.4 * skillInverse;
+    double appliedForce = baseForce + ((rng.nextDouble() * forceNoise) - (forceNoise / 2));
 
     return Vector2(dx, dy)..normalize()..scale(appliedForce * 0.01);
   }

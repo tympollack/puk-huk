@@ -230,6 +230,7 @@ class MatchmakingService {
         'state': {
           'status': 'active',
           'turn_number': 1,
+          'turn_started_at': DateTime.now().toUtc().toIso8601String(),
           'current_turn_player_id': player.uid,
           'scores': {player.uid: 0, botId: 0},
           'board_state': []

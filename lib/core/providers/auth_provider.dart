@@ -36,9 +36,9 @@ Future<PlayerModel?> currentPlayer(Ref ref) async {
 
 @riverpod
 Stream<PlayerModel?> playerById(Ref ref, String uid) {
-  if (uid == 'bot_pukhuk') {
+  if (uid == 'bot_pukhuk' || uid == '00000000-0000-0000-0000-000000000000') {
     return Stream.value(PlayerModel(
-      uid: 'bot_pukhuk',
+      uid: uid,
       displayName: 'PUK_HUK_BOT',
       elo: 1500,
       totalGames: 0,
