@@ -6,10 +6,13 @@ import 'package:go_router/go_router.dart';
 import 'package:uuid/uuid.dart';
 import 'package:vector_math/vector_math_64.dart' as vmath;
 
+import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../../../core/providers/auth_provider.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/theme/puk_huk_theme.dart';
 import '../../../data/models/game_session_model.dart';
+import '../../../services/leaderboard_service.dart';
 import '../../../services/realtime_sync_service.dart';
 import '../../../services/matchmaking_service.dart';
 import '../../../services/player_repository.dart';
@@ -141,7 +144,8 @@ class _GameScreenState extends ConsumerState<GameScreen> {
         if (state.status == 'active') {
           // Turn Timer Logic
           _turnTimer?.cancel();
-          if (isMyTurn) {
+          final isPuckInFlight = _game.inFlightPuck != null || (_game.activePuck?.isTracking ?? false);
+          if (isMyTurn && !isPuckInFlight) {
             final startTime = state.turnStartedAt ?? DateTime.now();
             final elapsed = DateTime.now().difference(startTime.toLocal()).inSeconds;
             final remaining = 15 - elapsed;
@@ -155,15 +159,17 @@ class _GameScreenState extends ConsumerState<GameScreen> {
             }
           }
 
-          if (isMyTurn && !wasMyTurn) {
+          if (isMyTurn && _game.activePuck == null && !isPuckInFlight) {
             // Add a small delay to ensure physics world is fully loaded if this is the first turn
-            Future.delayed(const Duration(milliseconds: 500), () {
+            Future.delayed(const Duration(milliseconds: 300), () {
               if (!mounted) return;
-              _game.spawnPuck(
-                ownerId: player.uid,
-                color: PukHukTheme.primary, // Local player color
-                puckId: Uuid().v4(),
-              );
+              if (isMyTurn && _game.activePuck == null && _game.inFlightPuck == null) {
+                _game.spawnPuck(
+                  ownerId: player.uid,
+                  color: PukHukTheme.primary, // Local player color
+                  puckId: const Uuid().v4(),
+                );
+              }
             });
           } else if (isBotTurn && !wasBotTurn && _botEngine != null) {
             _botEngine!.calculateBotImpulse(state: state, localPlayer: player).then((impulse) async {
@@ -347,9 +353,14 @@ class _GameScreenState extends ConsumerState<GameScreen> {
     final currentPucks = _game.world.children.whereType<PuckComponent>().toList();
     
     // Remove pucks that no longer exist in the authoritative state
-    // Protect both local active puck and bot puck currently in motion/aiming
+    // Protect active puck, in-flight pucks, and bot puck currently in motion/aiming
     for (final puck in currentPucks) {
-      if (puck == _game.activePuck || puck == _botPuck) continue;
+      if (puck == _game.activePuck ||
+          puck == _game.inFlightPuck ||
+          puck.isTracking ||
+          puck == _botPuck) {
+        continue;
+      }
       final existsInState = boardState.any((p) => p.puckId == puck.puckId);
       if (!existsInState) {
         puck.removeFromParent();
@@ -361,8 +372,11 @@ class _GameScreenState extends ConsumerState<GameScreen> {
       final existingPuck = currentPucks.where((p) => p.puckId == pState.puckId).firstOrNull;
       
       if (existingPuck != null) {
-        if (existingPuck != _game.activePuck && existingPuck != _botPuck) {
-          // Update position for opponent pucks that might have settled
+        if (existingPuck != _game.activePuck &&
+            existingPuck != _game.inFlightPuck &&
+            !existingPuck.isTracking &&
+            existingPuck != _botPuck) {
+          // Update position for settled pucks
           existingPuck.body.setTransform(Vector2(pState.x, pState.y), 0);
         }
       } else {
@@ -470,13 +484,29 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           winnerScore: finalState.scores[winnerId] ?? 0,
           loserScore: finalState.scores[loserId] ?? 0,
         );
+        ref.invalidate(currentPlayerProvider);
+        ref.invalidate(globalLeaderboardProvider);
       } else {
         final oppPlayer = await ref.read(playerRepositoryProvider).getPlayer(opponentId);
         final oppElo = oppPlayer?.elo ?? 1200;
         final oppGames = oppPlayer?.totalGames ?? 0;
 
+        // Fetch authoritative match_id from game_sessions table
+        String targetMatchId = widget.sessionId;
+        try {
+          final sessionRow = await Supabase.instance.client
+              .schema('pukhuk')
+              .from('game_sessions')
+              .select('match_id')
+              .eq('id', widget.sessionId)
+              .maybeSingle();
+          if (sessionRow != null && sessionRow['match_id'] != null) {
+            targetMatchId = sessionRow['match_id'] as String;
+          }
+        } catch (_) {}
+
         await matchmaking.resolveMatch(
-          matchId: widget.sessionId,
+          matchId: targetMatchId,
           winnerId: winnerId,
           loserId: loserId,
           winnerElo: winnerId == player.uid ? player.elo : oppElo,
@@ -486,6 +516,9 @@ class _GameScreenState extends ConsumerState<GameScreen> {
           winnerScore: finalState.scores[winnerId] ?? 0,
           loserScore: finalState.scores[loserId] ?? 0,
         );
+
+        ref.invalidate(currentPlayerProvider);
+        ref.invalidate(globalLeaderboardProvider);
       }
     } catch (e) {
       print('Could not resolve match record: $e');

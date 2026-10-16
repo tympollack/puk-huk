@@ -47,6 +47,8 @@ class PukHukGame extends Forge2DGame with PanDetector {
 
   PuckComponent? _activePuck;
   PuckComponent? get activePuck => _activePuck;
+  PuckComponent? _inFlightPuck;
+  PuckComponent? get inFlightPuck => _inFlightPuck;
   Vector2? _dragStart;
   Vector2? _aimStart;
   bool _isAiming = false;
@@ -169,6 +171,7 @@ class PukHukGame extends Forge2DGame with PanDetector {
       }
       _activePuck = null;
     }
+    _inFlightPuck = null;
     _particleEmitter?.clear();
     _dragStart = null;
     _aimStart = null;
@@ -191,12 +194,14 @@ class PukHukGame extends Forge2DGame with PanDetector {
 
       if (impulse.length > 0.005) {
         launched = true;
+        _inFlightPuck = puck;
         puck.body.applyLinearImpulse(impulse);
         // Apply angular impulse for authentic spin physics corresponding to lateral release
         final spinImpulse = (impulse.x * 0.004);
         puck.body.applyAngularImpulse(spinImpulse);
         onPuckLaunched?.call();
         puck.startTracking(onSettled: () {
+          _inFlightPuck = null;
           onPuckSettled?.call(puck);
           onThrowComplete?.call(puck.peakSpeed, puck.totalDistance);
         });

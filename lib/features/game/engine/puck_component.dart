@@ -104,6 +104,8 @@ class PuckComponent extends BodyComponent with ContactCallbacks {
     _aimImpulse = impulse;
   }
 
+  bool get isTracking => _isTracking;
+
   Vector2 consumeAimImpulse() {
     final impulse = _aimImpulse.clone();
     _aimImpulse = Vector2.zero();
