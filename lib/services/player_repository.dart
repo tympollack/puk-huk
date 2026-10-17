@@ -9,7 +9,7 @@ import '../data/models/player_model.dart';
 part 'player_repository.g.dart';
 
 @riverpod
-PlayerRepository playerRepository(PlayerRepositoryRef ref) =>
+PlayerRepository playerRepository(Ref ref) =>
     PlayerRepository(Supabase.instance.client);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -26,26 +26,13 @@ class PlayerRepository {
 
   PlayerRepository(this._supabase);
 
-  // ── Create both hub profile and game profile on sign-up ─────────────────
+  // ── Create game profile on sign-up ───────────────────────────────────────
   Future<void> createPlayer({
     required String uid,
     required String displayName,
   }) async {
-    // 1. Insert hub profile
-    final profileResult = await _supabase
-        .from('profiles')
-        .insert({
-          'auth_user_id': uid,
-          'display_name': displayName,
-        })
-        .select('id')
-        .single();
-
-    final profileId = profileResult['id'] as String;
-
-    // 2. Insert game profile (display_name denormalised for stream queries)
+    // Insert game profile directly (no hub profile dependency)
     await _supabase.schema('pukhuk').from('players').insert({
-      'profile_id': profileId,
       'auth_uid': uid,
       'display_name': displayName,
     });
@@ -53,26 +40,48 @@ class PlayerRepository {
 
   // ── Real-time stream of the current player's game profile ────────────────
   // Uses .stream() which subscribes via Supabase Realtime automatically.
-  Stream<PlayerModel?> watchPlayer(String authUid) {
-    return _supabase
-        .schema('pukhuk')
-        .from('players')
-        .stream(primaryKey: ['id'])
-        .eq('auth_uid', authUid)
-        .map((rows) {
-          if (rows.isEmpty) return null;
-          return PlayerModel.fromSupabase(rows.first);
-        });
-  }
-
-  // ── One-shot fetch ───────────────────────────────────────────────────────
-  Future<PlayerModel?> getPlayer(String authUid) async {
+  Future<PlayerModel?> watchPlayer(String authUid) async {
     final rows = await _supabase
         .schema('pukhuk')
         .from('players')
         .select()
         .eq('auth_uid', authUid)
         .limit(1);
+    
+    if (rows.isEmpty) return null;
+    return PlayerModel.fromSupabase(rows.first);
+  }
+
+  // ── One-shot fetch ───────────────────────────────────────────────────────
+  Future<PlayerModel?> getPlayer(String authUid) async {
+    var rows = await _supabase
+        .schema('pukhuk')
+        .from('players')
+        .select()
+        .eq('auth_uid', authUid)
+        .limit(1);
+        
+    if ((rows as List).isEmpty) {
+      // Auto-migrate old users or fix broken signups
+      try {
+        final user = _supabase.auth.currentUser;
+        if (user != null && user.id == authUid) {
+          final displayName = user.userMetadata?['display_name'] ?? 
+                              user.email?.split('@').first ?? 
+                              'Player';
+                              
+          await _supabase.schema('pukhuk').from('players').insert({
+            'auth_uid': authUid,
+            'display_name': displayName,
+          });
+          // Re-fetch
+          rows = await _supabase.schema('pukhuk').from('players').select().eq('auth_uid', authUid).limit(1);
+        }
+      } catch (e) {
+        // ignore fallback errors
+      }
+    }
+    
     if ((rows as List).isEmpty) return null;
     return PlayerModel.fromSupabase(rows.first as Map<String, dynamic>);
   }

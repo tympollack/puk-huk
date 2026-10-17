@@ -8,6 +8,8 @@ import '../../../core/router/app_router.dart';
 import '../../../core/theme/puk_huk_theme.dart';
 import '../../../data/models/player_model.dart';
 import '../../../services/leaderboard_service.dart';
+import '../../../services/matchmaking_service.dart';
+import '../../../services/match_history_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LobbyScreen — central hub: find matches, see active tournaments,
@@ -19,7 +21,7 @@ class LobbyScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final player = ref.watch(currentPlayerProvider).valueOrNull;
+    final player = ref.watch(currentPlayerProvider).value;
 
     return Scaffold(
       appBar: AppBar(
@@ -50,7 +52,16 @@ class LobbyScreen extends ConsumerWidget {
                     onTap: () => context.push(Routes.matchmaking),
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _ActionTile(
+                    icon: Icons.smart_toy,
+                    label: 'VS BOT',
+                    color: PukHukTheme.secondary,
+                    onTap: () => _startBotMatch(context, ref, player),
+                  ),
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: _ActionTile(
                     icon: Icons.emoji_events_outlined,
@@ -63,10 +74,18 @@ class LobbyScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 24),
 
-            // ── Active tournaments section ──────────────────────────────
-            Text('ACTIVE TOURNAMENTS', style: Theme.of(context).textTheme.titleSmall),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('RECENT MATCHES', style: Theme.of(context).textTheme.titleSmall),
+                TextButton(
+                  onPressed: () => context.push(Routes.matchHistory),
+                  child: Text('>>>', style: GoogleFonts.orbitron(color: PukHukTheme.primary, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ),
             const SizedBox(height: 10),
-            const _TournamentListPlaceholder(),
+            _MatchHistoryPreview(),
 
             const SizedBox(height: 24),
             Text('GLOBAL LEADERBOARD', style: Theme.of(context).textTheme.titleSmall),
@@ -76,6 +95,39 @@ class LobbyScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _startBotMatch(BuildContext context, WidgetRef ref, PlayerModel? player) async {
+    if (player == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Player profile could not be loaded. Please try logging out and in again.')),
+      );
+      return;
+    }
+    
+    // Show loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    final matchmakingService = ref.read(matchmakingServiceProvider);
+    final result = await matchmakingService.startBotMatch(player);
+
+    if (context.mounted) {
+      if (Navigator.of(context, rootNavigator: true).canPop()) {
+        Navigator.of(context, rootNavigator: true).pop(); // remove loading
+      }
+      
+      if (result.status == MatchmakingStatus.found) {
+        context.push(Routes.gameWithId(result.sessionId!));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to start bot match: ${result.errorMessage}')),
+        );
+      }
+    }
   }
 }
 
@@ -264,6 +316,86 @@ class _LeaderboardPreview extends ConsumerWidget {
           child: Text('Error loading leaderboard: $e'),
         ),
       ),
+    );
+  }
+}
+
+class _MatchHistoryPreview extends ConsumerWidget {
+  const _MatchHistoryPreview();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final historyAsync = ref.watch(matchHistoryProvider);
+
+    return historyAsync.when(
+      data: (items) {
+        if (items.isEmpty) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Text(
+                'NO RECENT MATCHES.',
+                style: GoogleFonts.orbitron(color: PukHukTheme.textSecondary),
+                textAlign: TextAlign.center,
+              ),
+            ),
+          );
+        }
+
+        // Just show up to 2 items
+        final displayItems = items.take(2).toList();
+        
+        return Column(
+          children: displayItems.map((item) {
+            final scores = item.state.scores;
+            final opponentScore = scores[item.opponent.uid] ?? 0;
+            final myScore = scores.entries.firstWhere((e) => e.key != item.opponent.uid, orElse: () => const MapEntry('', 0)).value;
+            final isWinner = myScore > opponentScore;
+            final statusText = item.isCompleted 
+                ? (isWinner ? 'VICTORY' : (myScore == opponentScore ? 'DRAW' : 'DEFEAT')) 
+                : (item.isMyTurn ? 'YOUR TURN' : 'OPPONENT TURN');
+
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: BorderSide(
+                  color: item.isCompleted ? Colors.transparent : PukHukTheme.primary,
+                  width: item.isMyTurn && !item.isCompleted ? 2 : 0,
+                ),
+              ),
+              child: ListTile(
+                onTap: () {
+                  if (!item.isCompleted) {
+                    context.push(Routes.gameWithId(item.sessionId));
+                  } else {
+                    context.push(Routes.matchHistory);
+                  }
+                },
+                leading: CircleAvatar(
+                  radius: 16,
+                  backgroundColor: PukHukTheme.primary,
+                  child: Text(
+                    (item.opponent.displayName).substring(0, 1).toUpperCase(),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black),
+                  ),
+                ),
+                title: Text(item.opponent.displayName, style: Theme.of(context).textTheme.bodyMedium),
+                subtitle: Text(
+                  statusText,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: item.isCompleted ? (isWinner ? PukHukTheme.primary : Colors.red) : PukHukTheme.secondary,
+                  ),
+                ),
+                trailing: Text('$myScore - $opponentScore', style: GoogleFonts.orbitron(fontWeight: FontWeight.bold)),
+              ),
+            );
+          }).toList(),
+        );
+      },
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (_, __) => const Text('Failed to load history.'),
     );
   }
 }

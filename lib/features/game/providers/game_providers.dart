@@ -10,7 +10,7 @@ part 'game_providers.g.dart';
 // Live game session stream
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-Stream<GameSessionState> gameSession(GameSessionRef ref, String sessionId) {
+Stream<GameSessionState> gameSession(Ref ref, String sessionId) {
   final sync = ref.watch(realtimeSyncServiceProvider);
   return sync.watchSession(sessionId);
 }
@@ -31,5 +31,46 @@ abstract class ScoringZones {
   static int pointsForZone(int zone, {bool isHanger = false}) {
     if (isHanger) return hangerBonus;
     return zonePoints[zone] ?? 0;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live Telemetry Stream (Flame -> UI Bridge)
+// ─────────────────────────────────────────────────────────────────────────────
+class TelemetryState {
+  final double velocity; // m/s
+  final double angle;    // degrees
+  final double spin;     // RPS
+  final bool isAiming;
+
+  const TelemetryState({
+    this.velocity = 0.0,
+    this.angle = 0.0,
+    this.spin = 0.0,
+    this.isAiming = false,
+  });
+}
+
+@riverpod
+class Telemetry extends _$Telemetry {
+  @override
+  TelemetryState build() => const TelemetryState();
+
+  void updateTelemetry({
+    required double velocity,
+    required double angle,
+    required double spin,
+    required bool isAiming,
+  }) {
+    state = TelemetryState(
+      velocity: velocity,
+      angle: angle,
+      spin: spin,
+      isAiming: isAiming,
+    );
+  }
+
+  void reset() {
+    state = const TelemetryState();
   }
 }

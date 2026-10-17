@@ -9,29 +9,39 @@ import '../data/models/game_session_model.dart';
 part 'realtime_sync_service.g.dart';
 
 @riverpod
-RealtimeSyncService realtimeSyncService(RealtimeSyncServiceRef ref) =>
+RealtimeSyncService realtimeSyncService(Ref ref) =>
     RealtimeSyncService(Supabase.instance.client);
 
 class RealtimeSyncService {
   final SupabaseClient _supabase;
   final Map<String, RealtimeChannel> _channels = {};
+  final Map<String, StreamController<GameSessionState>> _sessionControllers = {};
+  final Map<String, StreamController<Map<String, dynamic>>> _presenceControllers = {};
 
   RealtimeSyncService(this._supabase);
 
   RealtimeChannel _channel(String sessionId) {
     return _channels.putIfAbsent(
       sessionId,
-      () => _supabase.channel('game_$sessionId'),
+      () => _supabase.channel(
+        'game_$sessionId',
+        opts: const RealtimeChannelConfig(ack: true),
+      ),
     );
   }
 
   Future<void> _ensureSubscribed(String sessionId) async {
     final ch = _channel(sessionId);
-    await ch.subscribe();
+    ch.subscribe();
   }
 
   Stream<GameSessionState> watchSession(String sessionId) {
+    if (_sessionControllers.containsKey(sessionId)) {
+      return _sessionControllers[sessionId]!.stream;
+    }
+
     final controller = StreamController<GameSessionState>.broadcast();
+    _sessionControllers[sessionId] = controller;
 
     Future<void> fetchAndEmit() async {
       try {
@@ -54,13 +64,13 @@ class RealtimeSyncService {
     fetchAndEmit();
 
     // Postgres Changes subscription
-    final channel = _channel(sessionId)
-      ..onPostgresChanges(
+    final channel = _channel(sessionId);
+    channel.onPostgresChanges(
         event: PostgresChangeEvent.update,
         schema: 'pukhuk',
         table: 'game_sessions',
         filter: PostgresChangeFilter(
-          type: FilterType.eq,
+          type: PostgresChangeFilterType.eq,
           column: 'id',
           value: sessionId,
         ),
@@ -74,17 +84,77 @@ class RealtimeSyncService {
             }
           }
         },
-      );
+      ).onPresenceSync((payload) {
+        if (!_presenceControllers.containsKey(sessionId)) return;
+        final presenceList = channel.presenceState();
+        final presenceMap = <String, dynamic>{};
+        
+        for (final item in presenceList) {
+          try {
+            final dynamic pPayload = (item as dynamic).state;
+            final playerId = pPayload['player_id'];
+            if (playerId != null) {
+              presenceMap[playerId] = pPayload;
+            }
+          } catch (_) {}
+        }
+        _presenceControllers[sessionId]?.add(presenceMap);
+      });
 
     _ensureSubscribed(sessionId);
 
     controller.onCancel = () async {
+      _sessionControllers.remove(sessionId);
+      _presenceControllers.remove(sessionId);
+      if (_channels[sessionId] == channel) {
+        _channels.remove(sessionId);
+      }
       await channel.unsubscribe();
-      _channels.remove(sessionId);
-      controller.close();
+      if (!controller.isClosed) {
+        controller.close();
+      }
     };
 
     return controller.stream;
+  }
+
+  Stream<Map<String, dynamic>> watchPresence(String sessionId) {
+    if (_presenceControllers.containsKey(sessionId)) {
+      return _presenceControllers[sessionId]!.stream;
+    }
+    final controller = StreamController<Map<String, dynamic>>.broadcast();
+    _presenceControllers[sessionId] = controller;
+    
+    // Emit initial presence if channel exists
+    if (_channels.containsKey(sessionId)) {
+      final presenceList = _channels[sessionId]!.presenceState();
+      final presenceMap = <String, dynamic>{};
+      
+      for (final item in presenceList) {
+        try {
+          final dynamic pPayload = (item as dynamic).state;
+          final playerId = pPayload['player_id'];
+          if (playerId != null) {
+            presenceMap[playerId] = pPayload;
+          }
+        } catch (_) {}
+      }
+      controller.add(presenceMap);
+    }
+    
+    controller.onCancel = () {
+      _presenceControllers.remove(sessionId);
+      controller.close();
+    };
+    return controller.stream;
+  }
+
+  Future<void> trackPresence(String sessionId, String playerId) async {
+    final ch = _channel(sessionId);
+    await ch.track({
+      'player_id': playerId,
+      'online_at': DateTime.now().toIso8601String(),
+    });
   }
 
   Future<void> submitTurn({
@@ -93,14 +163,22 @@ class RealtimeSyncService {
     required int expectedTurnNumber,
     required GameSessionState newState,
   }) async {
-    await _supabase.rpc(
-      'submit_turn',
-      params: {
-        'p_match_id': matchId,
-        'p_player_id': playerId,
-        'p_expected_turn_number': expectedTurnNumber,
-        'p_new_state': newState.toJson(),
-      },
-    ); // The rpc might need to point to public schema wrapper if pukhuk isn't in search_path, or we can use schema('pukhuk').rpc wait Supabase.instance.client.rpc doesn't have schema() chain for rpcs in all versions. Actually rpc method is just on client. If it doesn't work, standard is to put rpc in public or use set_config. For now we just call it.
+    try {
+      await _supabase.rpc(
+        'submit_turn',
+        params: {
+          'p_match_id': matchId,
+          'p_player_id': playerId,
+          'p_expected_turn_number': expectedTurnNumber,
+          'p_new_state': newState.toJson(),
+        },
+      );
+    } catch (e) {
+      print('RPC submit_turn failed: $e');
+      throw Exception('Failed to submit turn: $e');
+    }
+    
+    // Optimistic local update
+    _sessionControllers[matchId]?.add(newState);
   }
 }

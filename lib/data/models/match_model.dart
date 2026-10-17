@@ -10,7 +10,7 @@ part 'match_model.g.dart';
 enum MatchStatus { scheduled, active, completed, cancelled }
 
 @freezed
-class MatchModel with _$MatchModel {
+abstract class MatchModel with _$MatchModel {
   const factory MatchModel({
     required String matchId,
     required String player1Id,   // auth UID
@@ -74,7 +74,7 @@ class MatchModel with _$MatchModel {
 // Supabase table: puk_huk_matchmaking_queue
 // ─────────────────────────────────────────────────────────────────────────────
 @freezed
-class QueueEntry with _$QueueEntry {
+abstract class QueueEntry with _$QueueEntry {
   const factory QueueEntry({
     required String playerId,  // auth UID
     required int elo,

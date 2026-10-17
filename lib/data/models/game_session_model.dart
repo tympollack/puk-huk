@@ -9,7 +9,7 @@ part 'game_session_model.g.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 @freezed
-class PuckStateModel with _$PuckStateModel {
+abstract class PuckStateModel with _$PuckStateModel {
   const factory PuckStateModel({
     @JsonKey(name: 'puck_id') required String puckId,
     @JsonKey(name: 'owner_id') required String ownerId,
@@ -23,7 +23,7 @@ class PuckStateModel with _$PuckStateModel {
 }
 
 @freezed
-class ActionModel with _$ActionModel {
+abstract class ActionModel with _$ActionModel {
   const factory ActionModel({
     @JsonKey(name: 'player_id') required String playerId,
     @JsonKey(name: 'vector_x') required double vectorX,
@@ -38,11 +38,16 @@ class ActionModel with _$ActionModel {
 }
 
 @freezed
-class GameSessionState with _$GameSessionState {
+abstract class GameSessionState with _$GameSessionState {
   const factory GameSessionState({
-    required String status, // 'active', 'completed'
+    required String status, // 'active', 'paused', 'completed'
+    @JsonKey(name: 'theme_id') @Default('cyberpunk') String themeId,
     @JsonKey(name: 'turn_number') required int turnNumber,
     @JsonKey(name: 'current_turn_player_id') required String currentTurnPlayerId,
+    @JsonKey(name: 'turn_started_at') DateTime? turnStartedAt,
+    @JsonKey(name: 'missed_turns') @Default({}) Map<String, int> missedTurns,
+    @JsonKey(name: 'reserve_time') @Default({}) Map<String, int> reserveTime, // 30s continuous penalty timer
+    @JsonKey(name: 'pauses_used') @Default({}) Map<String, int> pausesUsed,
     required Map<String, int> scores,
     @JsonKey(name: 'last_action') ActionModel? lastAction,
     @JsonKey(name: 'board_state') @Default([]) List<PuckStateModel> boardState,

@@ -9,6 +9,7 @@ import '../../features/game/screens/game_screen.dart';
 import '../../features/profile/screens/profile_screen.dart';
 import '../../features/achievements/screens/achievements_screen.dart';
 import '../../features/matchmaking/screens/matchmaking_screen.dart';
+import '../../features/game/screens/match_history_screen.dart';
 import '../providers/auth_provider.dart';
 
 part 'app_router.g.dart';
@@ -22,6 +23,7 @@ abstract class Routes {
   static const profile = '/profile';
   static const achievements = '/achievements';
   static const matchmaking = '/matchmaking';
+  static const matchHistory = '/match_history';
   static const game = '/game/:sessionId';
 
   static String gameWithId(String sessionId) => '/game/$sessionId';
@@ -31,14 +33,14 @@ abstract class Routes {
 // Router provider
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-GoRouter appRouter(AppRouterRef ref) {
+GoRouter appRouter(Ref ref) {
   final authState = ref.watch(authStateProvider);
 
   return GoRouter(
     initialLocation: Routes.lobby,
     debugLogDiagnostics: true,
     redirect: (context, state) {
-      final isLoggedIn = authState.valueOrNull != null;
+      final isLoggedIn = authState.value != null;
       final isOnAuthRoute = state.fullPath?.startsWith('/auth') ?? false;
 
       if (!isLoggedIn && !isOnAuthRoute) return Routes.login;
@@ -84,6 +86,12 @@ GoRouter appRouter(AppRouterRef ref) {
             name: 'matchmaking',
             pageBuilder: (ctx, state) =>
                 _buildPage(state, const MatchmakingScreen()),
+          ),
+          GoRoute(
+            path: Routes.matchHistory,
+            name: 'matchHistory',
+            pageBuilder: (ctx, state) =>
+                _buildPage(state, const MatchHistoryScreen()),
           ),
         ],
       ),

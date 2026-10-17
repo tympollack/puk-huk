@@ -11,7 +11,7 @@ import 'elo_service.dart';
 part 'matchmaking_service.g.dart';
 
 @riverpod
-MatchmakingService matchmakingService(MatchmakingServiceRef ref) =>
+MatchmakingService matchmakingService(Ref ref) =>
     MatchmakingService(Supabase.instance.client);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ class MatchmakingService {
   // Join queue — returns a stream of MatchmakingState updates
   // ─────────────────────────────────────────────────────────────────────────
   Stream<MatchmakingState> joinQueue(PlayerModel player) {
-    final controller = StreamController<MatchmakingState>.broadcast();
+    late final StreamController<MatchmakingState> controller;
     var tolerance = 150;
     _searchStart = DateTime.now();
 
@@ -100,7 +100,6 @@ class MatchmakingService {
       if (!controller.isClosed) controller.add(s);
     }
 
-    // Inner closure captures tolerance by reference — updates as it expands.
     Future<void> checkCandidates() async {
       if (controller.isClosed) return;
       try {
@@ -132,76 +131,125 @@ class MatchmakingService {
           emit: emit,
           controller: controller,
         );
-      } catch (_) {
-        // Ignore transient fetch errors during search
-      }
+      } catch (_) {}
     }
 
-    // ── Initial state + queue entry ────────────────────────────────────────
-    emit(const MatchmakingState(status: MatchmakingStatus.searching));
+    controller = StreamController<MatchmakingState>.broadcast(
+      onListen: () {
+        emit(const MatchmakingState(status: MatchmakingStatus.searching));
 
-    _supabase.schema('pukhuk').from('matchmaking_queue').upsert({
-      'player_id': player.uid,
-      'elo': player.elo,
-      'games_played': player.totalGames,
-      'status': 'searching',
-      'joined_at': DateTime.now().toIso8601String(),
-    }).catchError((Object e) {
-      emit(MatchmakingState(
-        status: MatchmakingStatus.error,
-        errorMessage: e.toString(),
-      ));
-    });
+        _supabase.schema('pukhuk').from('matchmaking_queue').upsert({
+          'player_id': player.uid,
+          'elo': player.elo,
+          'games_played': player.totalGames,
+          'status': 'searching',
+          'joined_at': DateTime.now().toIso8601String(),
+        }).catchError((Object e) {
+          emit(MatchmakingState(
+            status: MatchmakingStatus.error,
+            errorMessage: e.toString(),
+          ));
+        });
 
-    // Initial candidate scan
-    checkCandidates();
+        checkCandidates();
 
-    // ── ELO tolerance expansion ────────────────────────────────────────────
-    _toleranceTimer = Timer.periodic(_toleranceExpandInterval, (_) {
-      tolerance = (tolerance + _toleranceStep).clamp(0, _maxTolerance);
-      emit(MatchmakingState(
-        status: MatchmakingStatus.searching,
-        waitTime: DateTime.now().difference(_searchStart!),
-        currentEloTolerance: tolerance,
-      ));
-      checkCandidates();
-    });
+        _toleranceTimer = Timer.periodic(_toleranceExpandInterval, (_) {
+          if (tolerance < _maxTolerance) {
+            tolerance += _toleranceStep;
+            emit(MatchmakingState(
+              status: MatchmakingStatus.searching,
+              currentEloTolerance: tolerance,
+              waitTime: DateTime.now().difference(_searchStart!),
+            ));
+          }
+        });
 
-    // ── Wait-time UI update (every 3 s) ────────────────────────────────────
-    _waitTimer = Timer.periodic(const Duration(seconds: 3), (_) {
-      emit(MatchmakingState(
-        status: MatchmakingStatus.searching,
-        waitTime: DateTime.now().difference(_searchStart!),
-        currentEloTolerance: tolerance,
-      ));
-      checkCandidates();
-    });
+        _waitTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+          emit(MatchmakingState(
+            status: MatchmakingStatus.searching,
+            currentEloTolerance: tolerance,
+            waitTime: DateTime.now().difference(_searchStart!),
+          ));
+          checkCandidates();
+        });
 
-    // ── 3-minute timeout ───────────────────────────────────────────────────
-    _timeoutTimer = Timer(_searchTimeout, () async {
-      await leaveQueue(player.uid);
-      emit(const MatchmakingState(status: MatchmakingStatus.timeout));
-      controller.close();
-    });
+        _timeoutTimer = Timer(_searchTimeout, () {
+          _cancelTimers();
+          emit(const MatchmakingState(status: MatchmakingStatus.timeout));
+          leaveQueue(player.uid);
+          controller.close();
+        });
 
-    // ── Realtime INSERT listener — fires when a new player joins the queue ─
-    _queueChannel = _supabase
-        .channel('matchmaking_${player.uid}')
-        .onPostgresChanges(
+        _queueChannel = _supabase.channel('public:puk_huk_game_sessions');
+        _queueChannel!.onPostgresChanges(
           event: PostgresChangeEvent.insert,
           schema: 'pukhuk',
-          table: 'matchmaking_queue',
-          callback: (_) => checkCandidates(),
-        )
-        .subscribe();
-
-    controller.onCancel = () {
-      _cancelTimers();
-      _queueChannel?.unsubscribe();
-      _queueChannel = null;
-    };
+          table: 'game_sessions',
+          callback: (payload) {
+            final newRow = payload.newRecord;
+            final stateJson = newRow['state'] as Map<String, dynamic>?;
+            if (stateJson != null) {
+              final scores = stateJson['scores'] as Map<String, dynamic>?;
+              if (scores != null && scores.containsKey(player.uid)) {
+                _cancelTimers();
+                emit(MatchmakingState(
+                  status: MatchmakingStatus.found,
+                  matchId: newRow['match_id'] as String?,
+                  sessionId: newRow['id'] as String?,
+                  opponentId: scores.keys.firstWhere((k) => k != player.uid),
+                  waitTime: DateTime.now().difference(_searchStart!),
+                ));
+                controller.close();
+              }
+            }
+          },
+        ).subscribe();
+      },
+      onCancel: () {
+        _cancelTimers();
+        leaveQueue(player.uid);
+        _queueChannel?.unsubscribe();
+        _queueChannel = null;
+      },
+    );
 
     return controller.stream;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Bot Match Initialization
+  // ─────────────────────────────────────────────────────────────────────────
+  Future<MatchmakingState> startBotMatch(PlayerModel player) async {
+    final id = const Uuid().v4();
+    final botId = '00000000-0000-0000-0000-000000000000';
+
+    try {
+      await _supabase.schema('pukhuk').from('game_sessions').insert({
+        'id': id,
+        'match_id': id,
+        'state': {
+          'status': 'active',
+          'turn_number': 1,
+          'turn_started_at': DateTime.now().toUtc().toIso8601String(),
+          'current_turn_player_id': player.uid,
+          'scores': {player.uid: 0, botId: 0},
+          'board_state': []
+        }
+      });
+
+      return MatchmakingState(
+        status: MatchmakingStatus.found,
+        matchId: id,
+        sessionId: id,
+        opponentId: botId,
+        waitTime: Duration.zero,
+      );
+    } catch (e) {
+      return MatchmakingState(
+        status: MatchmakingStatus.error,
+        errorMessage: e.toString(),
+      );
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -286,6 +334,40 @@ class MatchmakingService {
     );
 
     await _supabase.rpc('resolve_match', params: {
+      'p_match_id': matchId,
+      'p_winner_id': winnerId,
+      'p_loser_id': loserId,
+      'p_winner_elo_change': result.winnerEloChange,
+      'p_loser_elo_change': result.loserEloChange,
+      'p_winner_new_elo': result.winnerNewElo,
+      'p_loser_new_elo': result.loserNewElo,
+      'p_winner_score': winnerScore,
+      'p_loser_score': loserScore,
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Resolve unranked match (e.g. Bot match)
+  // ─────────────────────────────────────────────────────────────────────────
+  Future<void> resolveUnrankedMatch({
+    required String matchId,
+    required String winnerId,
+    required String loserId,
+    required int winnerElo,
+    required int loserElo,
+    required int winnerGamesPlayed,
+    required int loserGamesPlayed,
+    required int winnerScore,
+    required int loserScore,
+  }) async {
+    final result = EloService.calculateMatch(
+      winnerElo: winnerElo,
+      loserElo: loserElo,
+      winnerGamesPlayed: winnerGamesPlayed,
+      loserGamesPlayed: loserGamesPlayed,
+    );
+
+    await _supabase.rpc('resolve_unranked_match', params: {
       'p_match_id': matchId,
       'p_winner_id': winnerId,
       'p_loser_id': loserId,

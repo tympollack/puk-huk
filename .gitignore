@@ -21,7 +21,6 @@ ios/
 macos/
 linux/
 windows/
-web/
 
 .DS_Store
 

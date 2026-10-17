@@ -11,8 +11,8 @@ part 'auth_provider.g.dart';
 // Raw Supabase auth state — drives the go_router redirect guard.
 // Emits the auth UID (String) when signed in, null when signed out.
 // ─────────────────────────────────────────────────────────────────────────────
-@riverpod
-Stream<String?> authState(AuthStateRef ref) {
+@Riverpod(keepAlive: true)
+Stream<String?> authState(Ref ref) {
   return Supabase.instance.client.auth.onAuthStateChange
       .map((event) => event.session?.user.id);
 }
@@ -21,18 +21,38 @@ Stream<String?> authState(AuthStateRef ref) {
 // Current authenticated player — composite of hub profile + game profile.
 // Null when not signed in or profile not yet created.
 // ─────────────────────────────────────────────────────────────────────────────
+@Riverpod(keepAlive: true)
+Future<PlayerModel?> currentPlayer(Ref ref) async {
+  final authValue = ref.watch(authStateProvider).value;
+  if (authValue == null) {
+    return null;
+  }
+  
+  // Ensure the player profile exists (will auto-create if missing) before fetching
+  await ref.read(playerRepositoryProvider).getPlayer(authValue);
+  
+  return ref.read(playerRepositoryProvider).watchPlayer(authValue);
+}
+
 @riverpod
-Stream<PlayerModel?> currentPlayer(CurrentPlayerRef ref) {
-  final authValue = ref.watch(authStateProvider).valueOrNull;
-  if (authValue == null) return Stream.value(null);
-  return ref.watch(playerRepositoryProvider).watchPlayer(authValue);
+Stream<PlayerModel?> playerById(Ref ref, String uid) {
+  if (uid == 'bot_pukhuk' || uid == '00000000-0000-0000-0000-000000000000') {
+    return Stream.value(PlayerModel(
+      uid: uid,
+      displayName: 'PUK_HUK_BOT',
+      elo: 1500,
+      totalGames: 0,
+      wins: 0,
+    ));
+  }
+  return ref.watch(playerRepositoryProvider).watchPlayer(uid).asStream();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthService — sign in / sign up / sign out via Supabase Auth
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-AuthService authService(AuthServiceRef ref) =>
+AuthService authService(Ref ref) =>
     AuthService(Supabase.instance.client, ref.watch(playerRepositoryProvider));
 
 class AuthService {

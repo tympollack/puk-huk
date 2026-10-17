@@ -98,7 +98,7 @@ const List<Achievement> kAchievementCatalogue = [
 // Unlocked achievement IDs for current player (from PlayerModel.achievements)
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
-Set<String> unlockedAchievementIds(UnlockedAchievementIdsRef ref) {
-  final player = ref.watch(currentPlayerProvider).valueOrNull;
+Set<String> unlockedAchievementIds(Ref ref) {
+  final player = ref.watch(currentPlayerProvider).value;
   return player?.achievements.toSet() ?? {};
 }
