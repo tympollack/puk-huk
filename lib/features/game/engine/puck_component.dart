@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'puk_huk_game.dart';
 import 'board_boundary_component.dart';
+import '../../../services/asset_registry_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PuckComponent — a single shuffleboard puck with full physics simulation.
@@ -105,6 +106,8 @@ class PuckComponent extends BodyComponent with ContactCallbacks {
   }
 
   bool get isTracking => _isTracking;
+
+  String get resolvedPuckAssetUrl => AssetRegistryService.instance.resolvePuckUrl();
 
   Vector2 consumeAimImpulse() {
     final impulse = _aimImpulse.clone();

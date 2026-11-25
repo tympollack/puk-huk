@@ -2,6 +2,8 @@ import 'dart:ui' as ui;
 import 'package:flame_forge2d/flame_forge2d.dart';
 import 'package:flutter/material.dart';
 
+import '../../../services/asset_registry_service.dart';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BoardBoundaryComponent — static physics walls for rails plus visual
 // rendering of the Kenney wood-grain shuffleboard lane and defined scoring zones.
@@ -19,14 +21,25 @@ class BoardBoundaryComponent extends BodyComponent {
   static const double hangerStartFraction = 0.98; // overhang bonus zone (4pts)
 
   ui.Image? _surfaceTexture;
+  String? _resolvedLaneTextureUrl;
+
+  String? get resolvedLaneTextureUrl => _resolvedLaneTextureUrl;
 
   @override
   Future<void> onLoad() async {
     await super.onLoad();
-    try {
-      _surfaceTexture = await game.images.load('board_surface.jpg');
-    } catch (_) {
-      // Graceful fallback to procedural Kenney wood grain lane
+    final registry = AssetRegistryService.instance;
+    await registry.hydrateCatalog();
+    final laneUrl = registry.resolvePukHukLaneUrl();
+    _resolvedLaneTextureUrl = laneUrl;
+
+    _surfaceTexture = await registry.loadCdnImage(laneUrl);
+    if (_surfaceTexture == null) {
+      try {
+        _surfaceTexture = await game.images.load('board_surface.jpg');
+      } catch (_) {
+        // Graceful fallback to procedural Kenney wood grain lane
+      }
     }
   }
 
