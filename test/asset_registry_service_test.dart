@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:puk_huk/services/asset_registry_service.dart';
 
@@ -37,12 +39,37 @@ void main() {
         'https://custom-ip.sunshade.icu/ui/panel-metal.png',
       );
 
+      registry.registerPackOverride('physics', 'https://custom-ip.sunshade.icu/physics');
+      expect(
+        registry.resolvePukHukLaneUrl(),
+        'https://custom-ip.sunshade.icu/physics/lanes/board_surface.jpg',
+      );
+      expect(
+        registry.resolvePuckUrl(),
+        'https://custom-ip.sunshade.icu/physics/pucks/puck_standard.png',
+      );
+
       registry.registerOverride(
         'puk-lane-surface',
         const PukHukAssetOverride(url: 'https://custom-ip.sunshade.icu/maple-lane.png'),
       );
       expect(registry.resolvePukHukLaneUrl(), 'https://custom-ip.sunshade.icu/maple-lane.png');
       expect(registry.swapRevision.value, greaterThan(initialRev));
+    });
+
+    test('fails fast returning null when byteLoader returns empty or invalid image bytes', () async {
+      final registry = AssetRegistryService.create();
+      final empty = await registry.loadCdnImage(
+        'https://cdn.sunshade.icu/assets/kenney/empty.png',
+        byteLoader: (_) async => ByteData(0),
+      );
+      final corrupt = await registry.loadCdnImage(
+        'https://cdn.sunshade.icu/assets/kenney/corrupt.png',
+        byteLoader: (_) async => ByteData.sublistView(Uint8List.fromList([1, 2, 3, 4])),
+        timeout: const Duration(seconds: 5),
+      );
+      expect(empty, isNull);
+      expect(corrupt, isNull);
     });
 
     test('resolves Flame sprite coordinates for UI telemetry HUD frames', () {

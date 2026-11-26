@@ -25,15 +25,16 @@ class BoardBoundaryComponent extends BodyComponent {
 
   String? get resolvedLaneTextureUrl => _resolvedLaneTextureUrl;
 
-  @override
-  Future<void> onLoad() async {
-    await super.onLoad();
+  Future<void> _loadLaneTexture() async {
     final registry = AssetRegistryService.instance;
-    await registry.hydrateCatalog();
     final laneUrl = registry.resolvePukHukLaneUrl();
     _resolvedLaneTextureUrl = laneUrl;
 
-    _surfaceTexture = await registry.loadCdnImage(laneUrl);
+    final cdnTexture = await registry.loadCdnImage(laneUrl);
+    if (cdnTexture != null) {
+      _surfaceTexture = cdnTexture;
+      return;
+    }
     if (_surfaceTexture == null) {
       try {
         _surfaceTexture = await game.images.load('board_surface.jpg');
@@ -41,6 +42,25 @@ class BoardBoundaryComponent extends BodyComponent {
         // Graceful fallback to procedural Kenney wood grain lane
       }
     }
+  }
+
+  void _handleSwapRevision() {
+    _loadLaneTexture();
+  }
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+    final registry = AssetRegistryService.instance;
+    registry.swapRevision.addListener(_handleSwapRevision);
+    await registry.hydrateCatalog();
+    await _loadLaneTexture();
+  }
+
+  @override
+  void onRemove() {
+    AssetRegistryService.instance.swapRevision.removeListener(_handleSwapRevision);
+    super.onRemove();
   }
 
   @override

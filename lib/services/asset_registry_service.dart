@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/painting.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Canonical `@digitalcanopy/assets` R2 CDN base URL and Flame sprite adapter
@@ -169,6 +169,7 @@ class AssetRegistryService {
   ];
 
   final Map<String, PukHukAssetOverride> _overrides = {};
+  final Map<String, PukHukAssetOverride> _catalogEntries = {};
   final Map<String, String> _packOverrides = {};
   final ValueNotifier<int> swapRevision = ValueNotifier<int>(0);
   bool _hydrated = false;
@@ -177,6 +178,7 @@ class AssetRegistryService {
 
   void reset() {
     _overrides.clear();
+    _catalogEntries.clear();
     _packOverrides.clear();
     _hydrated = false;
     swapRevision.value++;
@@ -193,18 +195,25 @@ class AssetRegistryService {
     swapRevision.value++;
   }
 
-  bool hasOverride(String key) => _overrides.containsKey(key.trim());
+  bool hasOverride(String key) {
+    final cleanKey = key.trim();
+    return _overrides.containsKey(cleanKey) || _catalogEntries.containsKey(cleanKey);
+  }
 
-  PukHukAssetOverride? getOverride(String key) => _overrides[key.trim()];
+  PukHukAssetOverride? getOverride(String key) {
+    final cleanKey = key.trim();
+    return _overrides[cleanKey] ?? _catalogEntries[cleanKey];
+  }
 
   void loadCatalog(List<PukHukCatalogAsset> assets, {String? scope}) {
     final filtered = scope == null
         ? assets
         : assets.where((a) => a.appScope == scope || a.appScope == 'all');
+    _catalogEntries.clear();
     for (final asset in filtered) {
       final cleanKey = asset.assetKey.trim();
       if (cleanKey.isEmpty) continue;
-      _overrides[cleanKey] = PukHukAssetOverride(
+      _catalogEntries[cleanKey] = PukHukAssetOverride(
         url: asset.cdnUrl,
         metadata: asset.metadata,
       );
@@ -251,7 +260,7 @@ class AssetRegistryService {
 
   String resolveUrl(String key, {String fallbackUrl = ''}) {
     final cleanKey = key.trim();
-    return _overrides[cleanKey]?.url ?? fallbackUrl;
+    return _overrides[cleanKey]?.url ?? _catalogEntries[cleanKey]?.url ?? fallbackUrl;
   }
 
   String resolveAssetUrl(String pack, String assetPath, {String ext = 'png'}) {
@@ -274,26 +283,53 @@ class AssetRegistryService {
     if (packBase != null) {
       return '$packBase/$finalPath';
     }
+    if (_catalogEntries.containsKey(bareKey)) {
+      return _catalogEntries[bareKey]!.url;
+    }
+    if (_catalogEntries.containsKey(cleanPath)) {
+      return _catalogEntries[cleanPath]!.url;
+    }
     return '$cdnBaseUrl/$cleanPack/$finalPath';
   }
 
   String resolvePukHukLaneUrl() {
+    final cleanKey = 'puk-lane-surface';
+    if (_overrides.containsKey(cleanKey)) {
+      return _overrides[cleanKey]!.url;
+    }
+    if (_packOverrides.containsKey('physics')) {
+      return resolveAssetUrl('physics', 'lanes/board_surface', ext: 'jpg');
+    }
     return resolveUrl(
-      'puk-lane-surface',
+      cleanKey,
       fallbackUrl: resolveAssetUrl('physics', 'lanes/board_surface', ext: 'jpg'),
     );
   }
 
   String resolvePuckUrl() {
+    final cleanKey = 'puk-puck-standard';
+    if (_overrides.containsKey(cleanKey)) {
+      return _overrides[cleanKey]!.url;
+    }
+    if (_packOverrides.containsKey('physics')) {
+      return resolveAssetUrl('physics', 'pucks/puck_standard');
+    }
     return resolveUrl(
-      'puk-puck-standard',
+      cleanKey,
       fallbackUrl: resolveAssetUrl('physics', 'pucks/puck_standard'),
     );
   }
 
   String resolveBumperUrl() {
+    final cleanKey = 'puk-bumper-wood';
+    if (_overrides.containsKey(cleanKey)) {
+      return _overrides[cleanKey]!.url;
+    }
+    if (_packOverrides.containsKey('physics')) {
+      return resolveAssetUrl('physics', 'bumpers/bumper_wood');
+    }
     return resolveUrl(
-      'puk-bumper-wood',
+      cleanKey,
       fallbackUrl: resolveAssetUrl('physics', 'bumpers/bumper_wood'),
     );
   }
@@ -307,12 +343,18 @@ class AssetRegistryService {
     if (_overrides.containsKey(cleanKey)) {
       return _overrides[cleanKey]!.url;
     }
+    if (_packOverrides.containsKey('ui-pack')) {
+      return resolveAssetUrl('ui-pack', 'sounds/$cleanKey', ext: ext);
+    }
+    if (_catalogEntries.containsKey(cleanKey)) {
+      return _catalogEntries[cleanKey]!.url;
+    }
     return resolveAssetUrl('ui-pack', 'sounds/$cleanKey', ext: ext);
   }
 
   PukHukFlameSpriteData? resolveFlameUiSpriteData(String frameKey) {
     final cleanKey = frameKey.trim();
-    final override = _overrides[cleanKey];
+    final override = getOverride(cleanKey);
     final baseBounds = uiAtlasFrames[cleanKey];
     final frame = override?.frame ?? baseBounds;
     if (frame == null) return null;
@@ -331,20 +373,44 @@ class AssetRegistryService {
     Duration timeout = const Duration(seconds: 4),
   }) async {
     try {
-      final data = byteLoader != null
-          ? await byteLoader(url).timeout(timeout)
-          : await NetworkAssetBundle(Uri.parse(url)).load(url).timeout(timeout);
-      final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-      if (bytes.isEmpty) {
-        return null;
-      }
-      final completer = Completer<ui.Image>();
-      ui.decodeImageFromList(bytes, (img) {
-        if (!completer.isCompleted) {
-          completer.complete(img);
+      if (byteLoader != null) {
+        final data = await byteLoader(url).timeout(timeout);
+        final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+        if (bytes.isEmpty) {
+          return null;
         }
-      });
-      return await completer.future.timeout(timeout);
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frame = await codec.getNextFrame();
+        return frame.image;
+      }
+
+      // NetworkImage works on both Flutter Web (browser fetch) and native platforms.
+      final provider = NetworkImage(url);
+      final stream = provider.resolve(ImageConfiguration.empty);
+      final completer = Completer<ui.Image?>();
+      late final ImageStreamListener listener;
+      listener = ImageStreamListener(
+        (ImageInfo info, bool _) {
+          stream.removeListener(listener);
+          if (!completer.isCompleted) {
+            completer.complete(info.image);
+          }
+        },
+        onError: (Object _, StackTrace? __) {
+          stream.removeListener(listener);
+          if (!completer.isCompleted) {
+            completer.complete(null);
+          }
+        },
+      );
+      stream.addListener(listener);
+      return await completer.future.timeout(
+        timeout,
+        onTimeout: () {
+          stream.removeListener(listener);
+          return null;
+        },
+      );
     } catch (_) {
       return null;
     }
