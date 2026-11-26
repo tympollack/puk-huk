@@ -238,7 +238,7 @@ class AssetRegistryService {
             .select('app_scope, category, asset_key, cdn_url, metadata')
             .inFilter('app_scope', [appScope, 'all']);
 
-        if (rows is List && rows.isNotEmpty) {
+        if (rows.isNotEmpty) {
           final parsed = rows
               .whereType<Map<String, dynamic>>()
               .map(PukHukCatalogAsset.fromMap)
@@ -396,7 +396,7 @@ class AssetRegistryService {
             completer.complete(info.image);
           }
         },
-        onError: (Object _, StackTrace? __) {
+        onError: (Object _, StackTrace? _) {
           stream.removeListener(listener);
           if (!completer.isCompleted) {
             completer.complete(null);
