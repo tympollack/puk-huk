@@ -2,6 +2,8 @@ import 'dart:ui' as ui;
 import 'package:flame_forge2d/flame_forge2d.dart';
 import 'package:flutter/material.dart';
 
+import '../../../services/asset_registry_service.dart';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BoardBoundaryComponent — static physics walls for rails plus visual
 // rendering of the Kenney wood-grain shuffleboard lane and defined scoring zones.
@@ -19,15 +21,46 @@ class BoardBoundaryComponent extends BodyComponent {
   static const double hangerStartFraction = 0.98; // overhang bonus zone (4pts)
 
   ui.Image? _surfaceTexture;
+  String? _resolvedLaneTextureUrl;
+
+  String? get resolvedLaneTextureUrl => _resolvedLaneTextureUrl;
+
+  Future<void> _loadLaneTexture() async {
+    final registry = AssetRegistryService.instance;
+    final laneUrl = registry.resolvePukHukLaneUrl();
+    _resolvedLaneTextureUrl = laneUrl;
+
+    final cdnTexture = await registry.loadCdnImage(laneUrl);
+    if (cdnTexture != null) {
+      _surfaceTexture = cdnTexture;
+      return;
+    }
+    if (_surfaceTexture == null) {
+      try {
+        _surfaceTexture = await game.images.load('board_surface.jpg');
+      } catch (_) {
+        // Graceful fallback to procedural Kenney wood grain lane
+      }
+    }
+  }
+
+  void _handleSwapRevision() {
+    _loadLaneTexture();
+  }
 
   @override
   Future<void> onLoad() async {
     await super.onLoad();
-    try {
-      _surfaceTexture = await game.images.load('board_surface.jpg');
-    } catch (_) {
-      // Graceful fallback to procedural Kenney wood grain lane
-    }
+    final registry = AssetRegistryService.instance;
+    registry.swapRevision.addListener(_handleSwapRevision);
+    await registry.hydrateCatalog();
+    await _loadLaneTexture();
+  }
+
+  @override
+  void onRemove() {
+    AssetRegistryService.instance.swapRevision.removeListener(_handleSwapRevision);
+    super.onRemove();
   }
 
   @override

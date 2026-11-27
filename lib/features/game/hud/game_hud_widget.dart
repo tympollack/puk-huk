@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/puk_huk_theme.dart';
 import '../../../data/models/game_session_model.dart';
 import '../../../core/providers/auth_provider.dart';
+import '../../../services/asset_registry_service.dart';
 import '../../../services/realtime_sync_service.dart';
 import '../providers/game_providers.dart';
 
@@ -331,7 +332,9 @@ class _SpaceUiTelemetryStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final panelSpriteUrl = AssetRegistryService.instance.resolveUiSpriteUrl('panel-metal');
     return Container(
+      key: ValueKey('telemetry-strip-$panelSpriteUrl'),
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(

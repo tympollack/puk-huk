@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import 'puk_huk_game.dart';
 import 'board_boundary_component.dart';
+import '../../../services/asset_registry_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PuckComponent — a single shuffleboard puck with full physics simulation.
@@ -105,6 +106,34 @@ class PuckComponent extends BodyComponent with ContactCallbacks {
   }
 
   bool get isTracking => _isTracking;
+
+  ui.Image? _puckSprite;
+
+  Future<void> _loadPuckSprite() async {
+    final loaded = await AssetRegistryService.instance.loadCdnImage(resolvedPuckAssetUrl);
+    if (loaded != null) {
+      _puckSprite = loaded;
+    }
+  }
+
+  void _handleRegistrySwap() {
+    _loadPuckSprite();
+  }
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+    AssetRegistryService.instance.swapRevision.addListener(_handleRegistrySwap);
+    await _loadPuckSprite();
+  }
+
+  @override
+  void onRemove() {
+    AssetRegistryService.instance.swapRevision.removeListener(_handleRegistrySwap);
+    super.onRemove();
+  }
+
+  String get resolvedPuckAssetUrl => AssetRegistryService.instance.resolvePuckUrl();
 
   Vector2 consumeAimImpulse() {
     final impulse = _aimImpulse.clone();
@@ -262,14 +291,33 @@ class PuckComponent extends BodyComponent with ContactCallbacks {
     canvas.save();
     canvas.translate(topOffset.dx, topOffset.dy);
 
-    // 3. Outer Metallic Casing
-    final casingPaint = Paint()
-      ..shader = ui.Gradient.radial(
-        Offset(-radius * 0.2, -radius * 0.2),
-        radius,
-        const [Color(0xFF5A6370), Color(0xFF0A0D12)],
+    // 3. Outer Metallic Casing or CDN sprite
+    if (_puckSprite != null) {
+      canvas.save();
+      canvas.clipPath(
+        Path()..addOval(Rect.fromCircle(center: Offset.zero, radius: radius)),
       );
-    canvas.drawCircle(Offset.zero, radius, casingPaint);
+      canvas.drawImageRect(
+        _puckSprite!,
+        Rect.fromLTWH(
+          0,
+          0,
+          _puckSprite!.width.toDouble(),
+          _puckSprite!.height.toDouble(),
+        ),
+        Rect.fromCircle(center: Offset.zero, radius: radius),
+        Paint(),
+      );
+      canvas.restore();
+    } else {
+      final casingPaint = Paint()
+        ..shader = ui.Gradient.radial(
+          Offset(-radius * 0.2, -radius * 0.2),
+          radius,
+          const [Color(0xFF5A6370), Color(0xFF0A0D12)],
+        );
+      canvas.drawCircle(Offset.zero, radius, casingPaint);
+    }
 
     // 4. Colored Metallic Team Ring
     final coloredRingPaint = Paint()
