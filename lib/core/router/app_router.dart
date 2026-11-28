@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../features/auth/screens/login_screen.dart';
 import '../../features/lobby/screens/lobby_screen.dart';
@@ -19,6 +20,7 @@ part 'app_router.g.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 abstract class Routes {
   static const login = '/auth/login';
+  static const authCallback = '/auth/callback';
   static const lobby = '/lobby';
   static const profile = '/profile';
   static const achievements = '/achievements';
@@ -40,7 +42,9 @@ GoRouter appRouter(Ref ref) {
     initialLocation: Routes.lobby,
     debugLogDiagnostics: true,
     redirect: (context, state) {
-      final isLoggedIn = authState.value != null;
+      final isLoggedIn = authState.value != null ||
+          (!authState.hasValue &&
+              Supabase.instance.client.auth.currentSession != null);
       final isOnAuthRoute = state.fullPath?.startsWith('/auth') ?? false;
 
       if (!isLoggedIn && !isOnAuthRoute) return Routes.login;
@@ -52,6 +56,15 @@ GoRouter appRouter(Ref ref) {
       GoRoute(
         path: Routes.login,
         name: 'login',
+        pageBuilder: (ctx, state) => _buildPage(
+          state,
+          const LoginScreen(),
+          transitionType: _PageTransition.fade,
+        ),
+      ),
+      GoRoute(
+        path: Routes.authCallback,
+        name: 'authCallback',
         pageBuilder: (ctx, state) => _buildPage(
           state,
           const LoginScreen(),

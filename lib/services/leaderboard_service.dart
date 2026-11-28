@@ -83,8 +83,8 @@ class LeaderboardService {
         .channel('leaderboard_nearby_$myElo')
         .onPostgresChanges(
           event: PostgresChangeEvent.update,
-          schema: 'public',
-          table: 'puk_huk_players',
+          schema: 'pukhuk',
+          table: 'players',
           callback: (_) => fetch(),
         )
         .subscribe();

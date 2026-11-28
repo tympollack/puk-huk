@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'package:flutter_dotenv/flutter_dotenv.dart';
-
 import 'core/router/app_router.dart';
+import 'core/services/sso_auth_helper.dart';
 import 'core/supabase_config.dart';
 import 'core/theme/puk_huk_theme.dart';
 
@@ -23,12 +23,24 @@ Future<void> main() async {
     systemNavigationBarColor: PukHukTheme.surface,
   ));
 
-  await dotenv.load(fileName: ".env");
+  await dotenv.load(fileName: '.env');
 
   await Supabase.initialize(
     url: SupabaseConfig.url,
     anonKey: SupabaseConfig.anonKey,
+    authOptions: const FlutterAuthClientOptions(
+      authFlowType: AuthFlowType.pkce,
+    ),
   );
+
+  try {
+    await SsoAuthHelper.hydrateOnStartup(
+      client: Supabase.instance.client,
+      supabaseUrl: SupabaseConfig.url,
+    );
+  } catch (e) {
+    debugPrint('[Main] SSO startup hydration error: $e');
+  }
 
   runApp(const ProviderScope(child: PukHukApp()));
 }
