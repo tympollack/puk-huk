@@ -141,8 +141,8 @@ class PlayerRepository {
         .channel('match_history_$authUid')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'puk_huk_matches',
+          schema: 'pukhuk',
+          table: 'matches',
           callback: (_) => fetch(),
         )
         .subscribe();

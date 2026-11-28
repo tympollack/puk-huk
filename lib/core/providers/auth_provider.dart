@@ -1,9 +1,14 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../data/models/player_model.dart';
 import '../../services/player_repository.dart';
+import '../services/sso_auth_helper.dart';
+import '../services/sso_cookie.dart';
+import '../supabase_config.dart';
 
 part 'auth_provider.g.dart';
 
@@ -12,9 +17,10 @@ part 'auth_provider.g.dart';
 // Emits the auth UID (String) when signed in, null when signed out.
 // ─────────────────────────────────────────────────────────────────────────────
 @Riverpod(keepAlive: true)
-Stream<String?> authState(Ref ref) {
-  return Supabase.instance.client.auth.onAuthStateChange
-      .map((event) => event.session?.user.id);
+Stream<String?> authState(Ref ref) async* {
+  final auth = Supabase.instance.client.auth;
+  yield auth.currentSession?.user.id;
+  yield* auth.onAuthStateChange.map((event) => event.session?.user.id);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,10 +33,10 @@ Future<PlayerModel?> currentPlayer(Ref ref) async {
   if (authValue == null) {
     return null;
   }
-  
+
   // Ensure the player profile exists (will auto-create if missing) before fetching
   await ref.read(playerRepositoryProvider).getPlayer(authValue);
-  
+
   return ref.read(playerRepositoryProvider).watchPlayer(authValue);
 }
 
@@ -49,7 +55,7 @@ Stream<PlayerModel?> playerById(Ref ref, String uid) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AuthService — sign in / sign up / sign out via Supabase Auth
+// AuthService — SunShade Hub SSO, guest play, and sign out via Supabase Auth
 // ─────────────────────────────────────────────────────────────────────────────
 @riverpod
 AuthService authService(Ref ref) =>
@@ -61,31 +67,37 @@ class AuthService {
 
   AuthService(this._supabase, this._playerRepo);
 
-  Future<void> signInWithEmail(String email, String password) async {
-    await _supabase.auth.signInWithPassword(email: email, password: password);
+  /// Routes the user through SunShade Hub Central SSO (`hub[-stag].sunshade.icu/login`).
+  Future<void> signInWithSunShadeHub() async {
+    final ssoState = SsoAuthHelper.generateSsoState();
+    if (kIsWeb) {
+      saveSsoLoginState(ssoState);
+    }
+    final targetUri = SsoAuthHelper.hubLoginUriFor(
+      Uri.base,
+      ssoState: kIsWeb ? ssoState : null,
+    );
+    if (kIsWeb) {
+      redirectToUrl(targetUri.toString());
+      return;
+    }
+    if (!await launchUrl(targetUri, mode: LaunchMode.externalApplication)) {
+      throw Exception('Unable to open SunShade Hub SSO');
+    }
   }
 
-  Future<void> signUpWithEmail({
-    required String email,
-    required String password,
-    required String displayName,
-  }) async {
-    final response = await _supabase.auth.signUp(
-      email: email,
-      password: password,
-      data: {'display_name': displayName},
-    );
-
+  /// Signs in anonymously as a guest and ensures a `pukhuk.players` row exists.
+  Future<void> signInAsGuest() async {
+    final response = await _supabase.auth.signInAnonymously();
     final user = response.user;
     if (user == null) return;
-
-    // Bootstrap hub profile + game profile.
-    // PlayerRepository.createPlayer handles both inserts atomically.
-    await _playerRepo.createPlayer(
-      uid: user.id,
-      displayName: displayName,
-    );
+    await _playerRepo.getPlayer(user.id);
   }
 
-  Future<void> signOut() => _supabase.auth.signOut();
+  Future<void> signOut() async {
+    await _supabase.auth.signOut();
+    if (kIsWeb) {
+      clearSsoAuthCookies(SsoAuthHelper.projectRefFromUrl(SupabaseConfig.url));
+    }
+  }
 }
