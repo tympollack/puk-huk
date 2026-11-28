@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -27,9 +28,20 @@ abstract final class SsoAuthHelper {
     return ref.isEmpty ? null : ref;
   }
 
+  /// Generates a cryptographically random anti-CSRF state token for Hub SSO redirects.
+  static String generateSsoState() {
+    final rng = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
+    return base64UrlEncode(bytes).replaceAll('=', '');
+  }
+
   /// Resolves the SunShade Hub login URL (`hub-stag` for staging/previews/localhost,
   /// `hub` for production) with `redirectTo` pointing back to the app origin.
-  static Uri hubLoginUriFor(Uri currentUri, {String? fallbackOrigin}) {
+  static Uri hubLoginUriFor(
+    Uri currentUri, {
+    String? fallbackOrigin,
+    String? ssoState,
+  }) {
     final host = currentUri.host.toLowerCase();
     final isStaging = host.contains('-stag') ||
         host.contains('staging') ||
@@ -45,8 +57,101 @@ abstract final class SsoAuthHelper {
         ? currentUri.origin
         : (fallbackOrigin ?? 'https://pukhuk.sunshade.icu');
 
+    final redirectTarget = (ssoState != null && ssoState.isNotEmpty)
+        ? Uri.parse(origin).replace(queryParameters: {'sso_state': ssoState}).toString()
+        : origin;
+
     return Uri.parse('$hubBase/login').replace(
-      queryParameters: {'redirectTo': origin},
+      queryParameters: {'redirectTo': redirectTarget},
+    );
+  }
+
+  /// Checks whether [referrer] comes from a trusted SunShade Hub origin.
+  static bool isTrustedHubReferrer(String? referrer) {
+    if (referrer == null || referrer.trim().isEmpty) return false;
+    final parsed = Uri.tryParse(referrer.trim());
+    if (parsed == null) return false;
+    final host = parsed.host.toLowerCase();
+    if (parsed.scheme == 'https') {
+      return host == 'hub.sunshade.icu' ||
+          host == 'hub-stag.sunshade.icu' ||
+          host == 'sunshade.icu' ||
+          host.endsWith('-sunshade-systems.vercel.app');
+    }
+    if (parsed.scheme == 'http') {
+      return host == 'localhost' || host == '127.0.0.1';
+    }
+    return false;
+  }
+
+  /// Extracts the `sso_state` nonce from query parameters or from `next` inside a hash callback.
+  static String? extractSsoStateFromUri(Uri uri) {
+    final direct = uri.queryParameters['sso_state'];
+    if (direct != null && direct.isNotEmpty) return direct;
+
+    final nextRaw = uri.queryParameters['next'];
+    if (nextRaw != null && nextRaw.isNotEmpty) {
+      final parsedNext = Uri.tryParse(nextRaw);
+      final nextState = parsedNext?.queryParameters['sso_state'];
+      if (nextState != null && nextState.isNotEmpty) return nextState;
+    }
+
+    if (uri.hasFragment && uri.fragment.isNotEmpty) {
+      final fragment = uri.fragment;
+      final queryPart = fragment.contains('?')
+          ? fragment.split('?').last
+          : (fragment.startsWith('/') ? '' : fragment);
+      if (queryPart.contains('=')) {
+        try {
+          final fragmentParams = Uri.splitQueryString(queryPart);
+          final fragState = fragmentParams['sso_state'];
+          if (fragState != null && fragState.isNotEmpty) return fragState;
+
+          final fragNext = fragmentParams['next'];
+          if (fragNext != null && fragNext.isNotEmpty) {
+            final parsedNext = Uri.tryParse(fragNext);
+            final nextState = parsedNext?.queryParameters['sso_state'];
+            if (nextState != null && nextState.isNotEmpty) return nextState;
+          }
+        } catch (_) {}
+      }
+    }
+
+    return null;
+  }
+
+  /// Strips SSO callback tokens and transient handshake params from [uri] without
+  /// retaining null-replaced fragments (Dart's `Uri.replace` preserves existing fragments on null).
+  static Uri stripAuthTokensFromUri(Uri uri) {
+    final query = Map<String, String>.from(uri.queryParameters)
+      ..remove('access_token')
+      ..remove('refresh_token')
+      ..remove('hub_jwt')
+      ..remove('token')
+      ..remove('user_id')
+      ..remove('next')
+      ..remove('sso_state');
+
+    var fragment = uri.fragment;
+    if (fragment.contains('access_token=') ||
+        fragment.contains('refresh_token=') ||
+        fragment.contains('hub_jwt=') ||
+        fragment.contains('token=')) {
+      if (fragment.startsWith('/')) {
+        fragment = fragment.split('?').first;
+      } else {
+        fragment = '';
+      }
+    }
+
+    return Uri(
+      scheme: uri.scheme,
+      userInfo: uri.userInfo.isEmpty ? null : uri.userInfo,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: uri.path,
+      queryParameters: query.isEmpty ? null : query,
+      fragment: fragment.isEmpty ? null : fragment,
     );
   }
 
@@ -256,9 +361,22 @@ abstract final class SsoAuthHelper {
     final uri = currentUri ?? Uri.base;
     final urlTokens = extractTokensFromUri(uri);
     if (urlTokens != null) {
-      final ok = await _applyTokens(client, urlTokens);
+      final callbackState = extractSsoStateFromUri(uri);
+      final expectedState = consumeSsoLoginState();
+      final hasMatchingState = expectedState != null &&
+          expectedState.isNotEmpty &&
+          callbackState == expectedState;
+      final hasTrustedHubEntry = client.auth.currentSession == null &&
+          isTrustedHubReferrer(readDocumentReferrer());
+
       clearUrlAuthTokens();
-      if (ok) return true;
+
+      if (hasMatchingState || hasTrustedHubEntry) {
+        final ok = await _applyTokens(client, urlTokens);
+        if (ok) return true;
+      } else {
+        debugPrint('[SsoAuthHelper] Rejected unsolicited URL callback tokens.');
+      }
     }
 
     if (!kIsWeb) return client.auth.currentSession != null;
@@ -296,21 +414,20 @@ abstract final class SsoAuthHelper {
     if (!isJwtUnexpired(tokens.accessToken)) return false;
 
     try {
+      // Verify access token signature & user identity with Supabase Auth before admitting session.
+      final userRes = await client.auth.getUser(tokens.accessToken);
+      final verifiedUser = userRes.user;
+      if (verifiedUser == null) return false;
+
       final sessionJson = jsonEncode({
         'access_token': tokens.accessToken,
         'token_type': 'bearer',
-        'user': {
-          'id': tokens.userId ?? '',
-          'aud': 'authenticated',
-          'created_at': DateTime.now().toUtc().toIso8601String(),
-          'app_metadata': <String, dynamic>{},
-          'user_metadata': <String, dynamic>{},
-        },
+        'user': verifiedUser.toJson(),
       });
       final res = await client.auth.recoverSession(sessionJson);
       return res.session != null;
     } catch (e) {
-      debugPrint('[SsoAuthHelper] recoverSession failed: ${e.runtimeType}');
+      debugPrint('[SsoAuthHelper] Access token verification/recovery failed: ${e.runtimeType}');
       return false;
     }
   }

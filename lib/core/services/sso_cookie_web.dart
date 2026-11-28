@@ -1,8 +1,30 @@
 import 'package:web/web.dart' as web;
 
+import 'sso_auth_helper.dart';
+
+const String _ssoStateStorageKey = 'pukhuk_sso_state';
+
 String readBrowserCookies() => web.document.cookie;
 
 String getCurrentOrigin() => web.window.location.origin;
+
+String readDocumentReferrer() => web.document.referrer;
+
+void saveSsoLoginState(String state) {
+  try {
+    web.window.sessionStorage.setItem(_ssoStateStorageKey, state);
+  } catch (_) {}
+}
+
+String? consumeSsoLoginState() {
+  try {
+    final value = web.window.sessionStorage.getItem(_ssoStateStorageKey);
+    web.window.sessionStorage.removeItem(_ssoStateStorageKey);
+    return value;
+  } catch (_) {
+    return null;
+  }
+}
 
 void redirectToUrl(String url) {
   web.window.location.href = url;
@@ -15,24 +37,7 @@ void openExternalUrl(String url) {
 void clearUrlAuthTokens() {
   try {
     final currentUri = Uri.parse(web.window.location.href);
-    final query = Map<String, String>.from(currentUri.queryParameters)
-      ..remove('access_token')
-      ..remove('refresh_token')
-      ..remove('next');
-
-    var fragment = currentUri.fragment;
-    if (fragment.contains('access_token=') || fragment.contains('refresh_token=')) {
-      if (fragment.startsWith('/')) {
-        fragment = fragment.split('?').first;
-      } else {
-        fragment = '';
-      }
-    }
-
-    final cleanUri = currentUri.replace(
-      queryParameters: query.isEmpty ? null : query,
-      fragment: fragment.isEmpty ? null : fragment,
-    );
+    final cleanUri = SsoAuthHelper.stripAuthTokensFromUri(currentUri);
     web.window.history.replaceState(null, '', cleanUri.toString());
   } catch (_) {}
 }

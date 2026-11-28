@@ -69,7 +69,14 @@ class AuthService {
 
   /// Routes the user through SunShade Hub Central SSO (`hub[-stag].sunshade.icu/login`).
   Future<void> signInWithSunShadeHub() async {
-    final targetUri = SsoAuthHelper.hubLoginUriFor(Uri.base);
+    final ssoState = SsoAuthHelper.generateSsoState();
+    if (kIsWeb) {
+      saveSsoLoginState(ssoState);
+    }
+    final targetUri = SsoAuthHelper.hubLoginUriFor(
+      Uri.base,
+      ssoState: kIsWeb ? ssoState : null,
+    );
     if (kIsWeb) {
       redirectToUrl(targetUri.toString());
       return;

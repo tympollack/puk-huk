@@ -11,13 +11,17 @@ String _makeJwt({required String sub, required int expSeconds}) {
 
 void main() {
   group('SsoAuthHelper.hubLoginUriFor', () {
-    test('routes staging hosts to hub-stag.sunshade.icu', () {
+    test('routes staging hosts to hub-stag.sunshade.icu with sso_state', () {
       final uri = SsoAuthHelper.hubLoginUriFor(
         Uri.parse('https://pukhuk-stag.sunshade.icu/#/lobby'),
+        ssoState: 'state_123',
       );
       expect(uri.host, equals('hub-stag.sunshade.icu'));
       expect(uri.path, equals('/login'));
-      expect(uri.queryParameters['redirectTo'], equals('https://pukhuk-stag.sunshade.icu'));
+      expect(
+        uri.queryParameters['redirectTo'],
+        equals('https://pukhuk-stag.sunshade.icu?sso_state=state_123'),
+      );
     });
 
     test('routes vercel previews and localhost to hub-stag.sunshade.icu', () {
@@ -47,27 +51,39 @@ void main() {
     });
   });
 
-  group('SsoAuthHelper.extractTokensFromUri', () {
-    test('extracts tokens from query parameters', () {
+  group('SsoAuthHelper.extractTokensFromUri & stripAuthTokensFromUri', () {
+    test('extracts tokens from query parameters and strips them cleanly', () {
       final jwt = _makeJwt(sub: 'user-1', expSeconds: 9999999999);
-      final tokens = SsoAuthHelper.extractTokensFromUri(
-        Uri.parse('https://pukhuk.sunshade.icu/?access_token=$jwt&refresh_token=ref_123'),
+      final raw = Uri.parse(
+        'https://pukhuk.sunshade.icu/?access_token=$jwt&refresh_token=ref_123&sso_state=abc#/lobby',
       );
+      final tokens = SsoAuthHelper.extractTokensFromUri(raw);
       expect(tokens, isNotNull);
       expect(tokens!.accessToken, equals(jwt));
       expect(tokens.refreshToken, equals('ref_123'));
       expect(tokens.userId, equals('user-1'));
+
+      final cleaned = SsoAuthHelper.stripAuthTokensFromUri(raw);
+      expect(cleaned.hasQuery, isFalse);
+      expect(cleaned.fragment, equals('/lobby'));
     });
 
-    test('extracts tokens from hash fragment callbacks', () {
+    test('extracts tokens from hash fragment callbacks and clears fragment completely', () {
       final jwt = _makeJwt(sub: 'user-2', expSeconds: 9999999999);
-      final tokens = SsoAuthHelper.extractTokensFromUri(
-        Uri.parse('https://pukhuk.vercel.app/auth/callback#access_token=$jwt&refresh_token=ref_456'),
+      final raw = Uri.parse(
+        'https://pukhuk.vercel.app/auth/callback#access_token=$jwt&refresh_token=ref_456&next=%2F%3Fsso_state%3Dxyz',
       );
+      final tokens = SsoAuthHelper.extractTokensFromUri(raw);
       expect(tokens, isNotNull);
       expect(tokens!.accessToken, equals(jwt));
       expect(tokens.refreshToken, equals('ref_456'));
       expect(tokens.userId, equals('user-2'));
+      expect(SsoAuthHelper.extractSsoStateFromUri(raw), equals('xyz'));
+
+      final cleaned = SsoAuthHelper.stripAuthTokensFromUri(raw);
+      expect(cleaned.hasFragment, isFalse);
+      expect(cleaned.fragment, isEmpty);
+      expect(cleaned.toString(), equals('https://pukhuk.vercel.app/auth/callback'));
     });
 
     test('ignores go_router hash path fragments without tokens', () {
@@ -75,6 +91,15 @@ void main() {
         Uri.parse('https://pukhuk.sunshade.icu/#/lobby'),
       );
       expect(tokens, isNull);
+    });
+  });
+
+  group('SsoAuthHelper.isTrustedHubReferrer', () {
+    test('accepts Hub origins and rejects untrusted origins', () {
+      expect(SsoAuthHelper.isTrustedHubReferrer('https://hub.sunshade.icu/login'), isTrue);
+      expect(SsoAuthHelper.isTrustedHubReferrer('https://hub-stag.sunshade.icu/'), isTrue);
+      expect(SsoAuthHelper.isTrustedHubReferrer('https://evil.example.com/'), isFalse);
+      expect(SsoAuthHelper.isTrustedHubReferrer(''), isFalse);
     });
   });
 
